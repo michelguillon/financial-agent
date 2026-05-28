@@ -201,3 +201,107 @@ to fix on first sight.
 - **Scope destructive flags by partition key.** `--replace` on a flag
   alone is dangerous; `--replace` scoped to `data_source` is safe — you
   can't accidentally wipe real data by re-running the synthetic ingest.
+
+---
+
+## Step 3 — Rule-lookup wrapper
+
+### Goal
+
+Add the SQLite-first lookup layer that lets the agent grow the classifier
+over time. Approved rules from the agent's classification flow live in
+the `classification_rules` table; the unchanged hardcoded chain in
+`bank_statement_parser.py` is the fallback. This is the foundation the
+classification tools (Step 4) build on.
+
+### Methodology that worked
+
+**1. Sign off the redaction mapping before touching the file.**
+
+Copying a private file into a public repo is a one-shot operation that's
+much harder to undo than to plan. I extracted every personally
+identifying token from the source (account numbers, employer names,
+cleaner names, cardholder + card number, loan reference, file paths)
+and presented a flat 15-row mapping table for explicit approval before
+writing a single line. The mapping was the contract; the editing was
+mechanical.
+
+The grep-after-write — searching the redacted file for *every* original
+token to confirm zero occurrences remained — is the safety belt that
+catches anything the mapping missed.
+
+**2. Preserve the original, change only what the spec mandates.**
+
+SPEC §7 says "original script, preserved." The temptation was to also:
+fix a pre-existing typo (`self.data_append` instead of `self.data._append`
+in `import_barclaycard`), modernise the deprecated `df._append` calls,
+strip the unused Excel-import code path, slim the dependency footprint.
+None of that is redaction. Doing it all in one pass mixes "make it
+publishable" with "improve it" and makes the diff impossible to review
+for safety. The redaction commit does redaction only; cleanups can be
+their own PRs later.
+
+**3. SQLite REGEXP via a registered Python function.**
+
+SQLite has no built-in REGEXP operator — the syntax `WHERE memo REGEXP
+pattern` parses but raises at runtime unless you register a function for
+it. The fix is one line at connection open:
+
+```python
+conn.create_function("REGEXP", 2, _regexp)
+```
+
+The Python function does the actual matching. Errors in user-supplied
+patterns return `False` instead of raising, so a single malformed rule
+can't crash the whole lookup. The same `re.IGNORECASE` flag the
+hardcoded chain uses is applied here for consistency.
+
+**4. The end-to-end round-trip is the contract test.**
+
+The Step 1 round-trip verifier reported 1,193 mismatches against the
+*unredacted* classifier, all of them in the four known redaction
+buckets (cleaner, salary, cardholder, loan). After applying the
+redaction mapping to a copy of the classifier and re-running the same
+verification against this repo's copy: **100.00% agreement, 0
+mismatches across 18,780 rows.** That number is the contract holding.
+If a future redaction edit ever breaks the mapping, the same script
+catches it immediately.
+
+### Surprises
+
+**The hardcoded chain is more nuanced than it looks.**
+Re-reading the source for redaction surfaced details I'd missed in
+Step 1: a price-based Pret rule (`<£5 = café, ≥£5 = restaurant`), a
+joint memo pattern `MORRISONS PETROL` that lands as Supermarket because
+`MORRISONS.*` matches before any petrol rule, a `BARCLAYS PRTNR FIN`
+branch that maps to `kitchen/bathroom` with details `wren repayment`.
+None of this is documented anywhere except in the rule order itself.
+Step 4 (LLM-powered `suggest_classification`) will need to read this
+file as context so it doesn't suggest rules that collide with the
+hardcoded chain in surprising ways.
+
+**`if __name__ == "__main__":` blocks survive copy-paste, dependencies don't.**
+The redacted file still has the full Budget-class import pipeline and
+the argparse main block — both pull in `dotenv`, `openpyxl`, and the
+`pandas` Excel writer. For the agent's purposes only `categories()`
+and the `set_up_*` helpers are needed. Preserving the rest was a
+deliberate fidelity choice (per SPEC §7), but it does mean the public
+repo now depends on libraries that don't pull their weight for the
+agent. Worth resolving when `requirements.txt` lands — likely
+extracting the Budget class into a separate file would let the
+classifier sit on `pandas` alone.
+
+### Reusable patterns
+
+- **Mapping-table-as-contract** for any private→public migration.
+  Approving the mapping is approving the diff in advance; the writing
+  step becomes mechanical and the review surface is much smaller.
+- **Post-edit token grep** as the redaction safety belt. Cheaper than
+  reviewing the whole diff, and catches the case where one of N
+  occurrences was missed.
+- **Pre-existing test that proves the new layer didn't regress.** The
+  Step 1 round-trip verifier was originally tooling for the synthetic
+  generator. In Step 3 it doubles as the contract test for the
+  redaction mapping — same script, different question, same answer
+  format. A regression-watching tool you wrote once and keep
+  recycling tends to pay back faster than tools that prove one thing.
