@@ -104,3 +104,83 @@ inherit it.
   numbers, loan references, account numbers) are replaced with
   placeholders at the point the synthetic generator emits them. Nothing
   to forget at commit time.
+
+---
+
+## Step 2 — SQLite migration
+
+### Goal
+
+Get categorised transactions into a queryable store. Tools and the agent
+loop (Steps 4–5) need to issue SQL against the data; flat CSVs aren't
+enough. Schema = SPEC §4 verbatim.
+
+### Methodology that worked
+
+**1. Decouple the classifier from the migration.**
+
+The spec said "migrate.py loads existing CSV exports and runs the
+existing categories() function." That phrasing implies coupling — the
+migration tool depending on the classifier module. The cleaner design
+is to draw the boundary at *already-categorised CSV*: the classifier
+emits a CSV, the migration ingests a CSV. They never import each other.
+
+Concrete payoff: the real classifier doesn't have to be copied into the
+repo until Step 3 (where it actually needs to be — that's where the
+SQLite-first lookup wraps it). Step 2 ships independently against the
+synthetic dataset.
+
+**2. Auto-detect format from the CSV header.**
+
+Two formats exist in this project's lifetime: the synthetic schema
+(lowercase snake_case, has `data_source` col) and the existing
+preprocessed schema (Title Case with spaces, no `data_source`). Asking
+the user to pass `--format` would be a foot-gun every time. Inspecting
+the header row and choosing a row builder is ~10 lines and removes a
+whole class of "I passed the wrong flag" errors.
+
+**3. Validation lives inside the migration tool.**
+
+`migrate.py` ends every run with a validation block: row count, date
+range, count by category_main, count of `Missing`, and 5 random
+sample Missing rows for spot-checking. The user never has to remember
+to "also run the validator" — it's just the last 20 lines of output.
+
+**4. Idempotency scoped to data_source.**
+
+`--replace` deletes only rows matching the `data_source` being inserted.
+Real and synthetic data can coexist in one DB during development; replacing
+one doesn't touch the other. This is how the demo-mode switch
+([SPEC §3.6](SPEC_AGENT.md#36--demo-mode)) actually pays off — the dev
+workflow doesn't need separate DB files.
+
+### Surprises
+
+**Python 3.12 silently broke the default sqlite3 date adapter.**
+The migration ran fine but emitted `DeprecationWarning: The default date
+adapter is deprecated as of Python 3.12`. The fix is one-time module-load
+registration of explicit ISO-format adapters/converters for `date` and
+`datetime`:
+
+```python
+sqlite3.register_adapter(date, lambda d: d.isoformat())
+sqlite3.register_adapter(datetime, lambda dt: dt.isoformat(sep=" "))
+sqlite3.register_converter("date", lambda b: date.fromisoformat(b.decode()))
+sqlite3.register_converter("datetime", lambda b: datetime.fromisoformat(b.decode()))
+```
+
+Warnings on stdlib defaults are easy to ignore in the moment and a
+pain to debug years later when the default actually gets removed. Better
+to fix on first sight.
+
+### Reusable patterns
+
+- **Header-driven format detection** is a cheap alternative to `--format`
+  flags whenever multiple CSV layouts have to coexist. The header is
+  always there, always free to read.
+- **Validation block as the migration's epilogue.** Tools that produce
+  data should also report on the data they produced. Splitting it across
+  two scripts trains users to skip the second one.
+- **Scope destructive flags by partition key.** `--replace` on a flag
+  alone is dangerous; `--replace` scoped to `data_source` is safe — you
+  can't accidentally wipe real data by re-running the synthetic ingest.
