@@ -1,0 +1,33 @@
+# Private data — never commit (SPEC_AGENT.md §9)
+data/real/
+finance.db
+finance_real.db
+logs/
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code — user-local settings (shared settings.json should be committed)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
