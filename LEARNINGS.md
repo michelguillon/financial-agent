@@ -8,6 +8,23 @@ project hits a similar problem, what here would help?
 
 ---
 
+## Cross-cutting decisions
+
+### Testing strategy (so far): verify-by-running
+
+No pytest, no fixtures, no CI. Each step's validator is baked into the
+tool itself — the synthetic generator's summary, the throwaway round-trip
+verifier in Step 1, `migrate.py`'s validation epilogue. At this scale,
+"run the script, eyeball the output" has been faster than writing test
+infrastructure.
+
+The trigger for adopting pytest is Step 5 — the agent loop is where the
+regression surface (tools × scenarios × state transitions) gets large
+enough for unit tests to pay back. Stating this out loud so it reads as a
+policy, not an oversight.
+
+---
+
 ## Step 1 — Synthetic data generator
 
 ### Goal
