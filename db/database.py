@@ -3,12 +3,16 @@
 Single module, intentionally small. Adds new helpers here only when a tool
 actually needs them — speculative helpers rot fastest.
 
-The DB lives at the project-root `finance.db` (gitignored). Demo mode
-(SPEC §3.6) is determined by whether `data/real/` exists.
+The DB lives at `data/finance.db` (gitignored). It sits under data/ so the
+Docker bind-mount of `./data:/app/data` covers it without needing a
+separate single-file mount (which would create a directory on fresh
+checkouts where the file doesn't yet exist). Demo mode (SPEC §3.6) is
+determined by whether `data/real/` exists.
 """
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -16,9 +20,10 @@ from pathlib import Path
 
 # Project root = parent of the db/ directory this file lives in.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = PROJECT_ROOT / "finance.db"
+DATA_DIR = PROJECT_ROOT / "data"
+DB_PATH = DATA_DIR / "finance.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
-REAL_DATA_DIR = PROJECT_ROOT / "data" / "real"
+REAL_DATA_DIR = DATA_DIR / "real"
 
 
 # ---------------------------------------------------------------------------
@@ -74,3 +79,32 @@ def get_data_source() -> str:
     if REAL_DATA_DIR.exists() and any(REAL_DATA_DIR.glob("*.csv")):
         return "real"
     return "synthetic"
+
+
+# ---------------------------------------------------------------------------
+# SQLite REGEXP — Python regex backing for the `X REGEXP Y` operator.
+# Used by classifier/rule_lookup.py and agent/tools/classification.py so the
+# pattern matching is consistent everywhere (case-insensitive re.search).
+# ---------------------------------------------------------------------------
+
+def _regexp(pattern: str | None, value: str | None) -> bool:
+    """Backing function for SQLite's REGEXP operator.
+
+    Returns False (not error) on NULL inputs or invalid patterns, so a
+    single bad rule can't crash queries that scan many rows.
+    """
+    if pattern is None or value is None:
+        return False
+    try:
+        return re.search(pattern, value, re.IGNORECASE) is not None
+    except re.error:
+        return False
+
+
+def register_regexp(conn: sqlite3.Connection) -> None:
+    """Register the Python REGEXP function on a SQLite connection.
+
+    Call once per connection that needs `WHERE col REGEXP ?` queries.
+    Idempotent — re-registering the same name is harmless.
+    """
+    conn.create_function("REGEXP", 2, _regexp)

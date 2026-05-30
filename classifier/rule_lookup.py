@@ -20,7 +20,6 @@ Tests can call `reset_connection()` to drop it.
 
 from __future__ import annotations
 
-import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -33,7 +32,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from db.database import get_connection  # noqa: E402
+from db.database import get_connection, register_regexp  # noqa: E402
 from classifier.bank_statement_parser import categories as _hardcoded_categories  # noqa: E402
 
 
@@ -44,25 +43,11 @@ from classifier.bank_statement_parser import categories as _hardcoded_categories
 _conn: sqlite3.Connection | None = None
 
 
-def _regexp(pattern: str | None, value: str | None) -> bool:
-    """SQLite REGEXP operator backed by Python's re.search (case-insensitive).
-
-    Returns False (not error) on invalid pattern or NULL inputs, so a single
-    malformed rule can't crash the whole lookup.
-    """
-    if pattern is None or value is None:
-        return False
-    try:
-        return re.search(pattern, value, re.IGNORECASE) is not None
-    except re.error:
-        return False
-
-
 def _get_conn() -> sqlite3.Connection:
     global _conn
     if _conn is None:
         _conn = get_connection()
-        _conn.create_function("REGEXP", 2, _regexp)
+        register_regexp(_conn)
     return _conn
 
 

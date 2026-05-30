@@ -1,5 +1,7 @@
 # Private data — never commit (SPEC_AGENT.md §9)
 data/real/
+data/finance.db
+data/finance_real.db
 finance.db
 finance_real.db
 logs/
