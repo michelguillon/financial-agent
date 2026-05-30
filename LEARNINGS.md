@@ -23,6 +23,44 @@ regression surface (tools × scenarios × state transitions) gets large
 enough for unit tests to pay back. Stating this out loud so it reads as a
 policy, not an oversight.
 
+### Preview-before-apply for destructive agent tools
+
+**Default pattern:** any agent tool that performs an irreversible write
+gets a paired read-only preview tool that reports the scope of the
+intended change. The agent calls the preview first, the human sees the
+blast radius, the apply tool only runs after explicit approval.
+
+In this project that shape is `preview_rule_application` →
+`apply_classification_rule` (SPEC §5.1). The same shape applies to any
+future tool that deletes, bulk-overwrites, sends external messages, or
+calls a paid API on the user's behalf.
+
+**Why this beats the alternatives:**
+- **Prompt-only safety** ("the model is told to ask first") relies on
+  model behaviour every turn — fragile, breaks under unusual phrasing,
+  and a single forgotten instruction is a footgun.
+- **Tool-internal confirmation** (the apply tool returns "are you sure?"
+  and waits) breaks the agent loop's straight-line tool execution and
+  requires synchronous user input mid-call.
+- **Reversibility everywhere** (every write is undoable) sometimes works
+  but adds permanent complexity for what's usually a one-time approval
+  moment.
+
+The split-tool pattern makes the safety property *part of the API
+surface*. The agent literally cannot mutate without first having read
+the preview output into the conversation, which means the user has a
+text-form record of what they're approving.
+
+**When to skip it:** trivial overwrites the user can undo by re-issuing
+the request (e.g. `set_agent_state` overwriting one key); reads that
+happen to have side effects too small to surface (e.g. updating a
+`last_seen_at` timestamp); operations that are themselves *the user's
+intention stated literally* with no scope ambiguity ("delete this one
+row" with a primary key already in hand).
+
+**The test:** if asked after-the-fact "did the agent change something
+you didn't expect?" could a reasonable user say yes — add a preview.
+
 ---
 
 ## Step 1 — Synthetic data generator
@@ -354,10 +392,11 @@ load.
 
 `preview_rule_application` answers "how many?" without writing;
 `apply_classification_rule` writes. Splitting them means the agent's
-conversation flow naturally has an approval gate built in (the user sees
-the preview before saying yes). The alternative — one tool that mutates
-and returns a count — would push the safety question into prompt-
-engineering. The split makes it a property of the API.
+conversation flow naturally has an approval gate built in. This is the
+first concrete instance of a pattern that's now a project-wide default —
+see the
+[Preview-before-apply](#preview-before-apply-for-destructive-agent-tools)
+cross-cutting decision.
 
 **5. Inline smoke tests that mutate, then clean up.**
 
@@ -411,8 +450,8 @@ draft" can hide that fact from the orchestrator.
 - **Co-locate schema with function**; assemble the registry from the
   per-module exports. Single source of truth, drift-impossible.
 - **Two-step destructive operations** (preview → apply) where the
-  agent is in the loop. The shape of the API enforces the safety,
-  not just the prompt.
+  agent is in the loop — promoted to a [project-wide
+  default](#preview-before-apply-for-destructive-agent-tools).
 - **Tool-use with forced `tool_choice`** as a way to get guaranteed
   structured output from a model call — more robust than JSON-mode
   prompting because the schema is part of the request.
