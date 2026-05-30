@@ -1,0 +1,52 @@
+# Don't bake any of these into the image — most are gitignored anyway,
+# but .dockerignore is independent of .gitignore.
+
+# Git metadata
+.git/
+.gitignore
+.gitattributes
+
+# Python build / cache
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Secrets and real data — supplied via env_file/volume mounts at runtime
+.env
+.env.*
+!.env.example
+data/real/
+logs/
+
+# Local DB — mounted via ./data:/app/data so it persists across rebuilds
+data/finance.db
+data/finance_real.db
+finance.db
+finance_real.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Docs / plans
+*.md
+!README.md
+!SPEC_AGENT.md
+!LEARNINGS.md

@@ -1,0 +1,36 @@
+# docker-compose.yml — local-dev convenience wrapper.
+#
+# Volume mounts let the container persist state (finance.db) and read
+# secrets/real-data from the host without baking them into the image.
+#
+# Run any module ad-hoc:
+#   docker compose run --rm agent python -m agent.tool_registry
+#   docker compose run --rm agent python db/migrate.py --replace
+#   docker compose run --rm -it agent bash
+#
+# Set RUN_LLM_TESTS=1 in your .env to enable the suggest_classification
+# smoke test that actually calls the API.
+
+services:
+  agent:
+    build: .
+    container_name: personal-finance-agent
+    image: personal-finance-agent:latest
+    # Pass env vars from host .env (gitignored). Includes ANTHROPIC_API_KEY
+    # and optional RUN_LLM_TESTS. Marked not-required so the container still
+    # boots for smoke tests that don't touch the API.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # data/ holds: finance.db (auto-created on first migration), the
+      # committed synthetic CSV, and the gitignored real/ bank exports.
+      # Mounting the directory (not the file) means fresh checkouts don't
+      # run into Docker creating a directory at a missing file path.
+      - ./data:/app/data
+      # Conversation logs (when the Step 5 agent loop starts writing them).
+      - ./logs:/app/logs
+    # No fixed `command` — the user picks one per `docker compose run`.
+    # Interactive defaults so `docker compose run -it agent bash` works.
+    stdin_open: true
+    tty: true
