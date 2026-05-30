@@ -457,6 +457,118 @@ this user's historical real spending, not a forward-looking superset.
 Phase 2 (when the hardcoded chain migrates into the rules table) is the
 natural time to evolve sub-categories with the agent's help.
 
+---
+
+## Step 5 — Agent loop
+
+### Goal
+
+Wire the 11 tools, Sonnet 4.6, prompt caching, and a CLI into a working
+conversational agent. SPEC §6 had the shape; the work was turning it
+into ~600 lines of code that actually run inside the Docker container
+and feel coherent across multi-turn conversations.
+
+### Methodology that worked
+
+**1. Three thin modules, separated by I/O concern.**
+
+`agent/agent.py` is pure logic (Session, run_turn, build_system_prompt) —
+no printing, no file I/O, no SDK objects leaking out. `agent/cli.py` is
+the RichRenderer (display only). `agent/transcript.py` is the JSONL
+writer (persistence only). They share a tiny Renderer protocol so the
+core loop can be tested with a `SilentRenderer` mock that returns and
+records nothing. The total cost of the abstraction is ~5 methods on a
+Protocol class. The benefit is that all deterministic tests live inside
+`agent.agent` and never touch the terminal or the filesystem.
+
+**2. The system prompt is a product. Treat it that way.**
+
+The static block of the system prompt (~2,700 chars) carries four
+load-bearing things: the role, the preview-before-apply contract, the
+state-store boundary rule, and the taxonomy-honesty instruction. Each
+of those four came from a specific architectural decision documented
+elsewhere in this repo (SPEC §3.1, §3.4, §6, [Preview-before-apply
+cross-cutting decision](#preview-before-apply-for-destructive-agent-tools)).
+Writing the prompt was an exercise in *projection* — squeezing each
+decision into 1–3 sentences that the model can actually follow. The
+empirical validation: a 3-turn conversation followed all four
+constraints without further nudging.
+
+**3. The agent caught a bug I'd missed in scenario.model_scenario.**
+
+First end-to-end test, turn 2: the model output `monthly_payment_delta:
+£30,833/month` for a 2%→4% rate change on £185k. The agent's response
+opened with "⚠️ The model has returned a payment delta of £30,833/month
+which is clearly wrong — that's what simple interest on £185k at 2%
+would be annually, not monthly." Root cause: the tool expected rates as
+decimals (0.02) but the model passed percentages (2). Two takeaways:
+
+  - The "surface uncertainty" prompt instruction had real teeth — the
+    agent didn't just render the wrong number.
+  - The tool was too brittle. Fix: accept both forms via `if rate >= 1:
+    rate /= 100`. Now both decimal and percentage inputs work.
+
+The deeper lesson: **end-to-end LLM testing isn't optional, even for
+deterministically-tested tools**. The bug was in correct-looking
+Python that passed every unit-style test in Step 4. Only a live model
+actually using the tool surfaced the API mismatch.
+
+**4. Prompt caching works exactly as the SPEC promised.**
+
+Turn 1 input: 911 tokens, cache_read 0. Turn 2 input: 2,279 tokens,
+cache_read **9,378** — meaning ~9.4k tokens of system + state snapshot
+were served from cache at $0.30/MTok instead of $3.00/MTok. Net
+savings on a 3-turn conversation: ~$0.025. For longer sessions or
+heavier traffic this becomes the dominant cost lever. Worth the ~5
+lines of `cacheable_text_block(...)` wrapping in `build_system_prompt`.
+
+### Surprises
+
+**Module patching gets confused when `__name__ == "__main__"`.**
+First version of the deterministic dispatch-error test patched
+`agent.agent.call_with_retry` — but when invoked as `python -m
+agent.agent`, the running module's `__name__` is `__main__`, not
+`agent.agent`. There were two module objects in `sys.modules` (the
+original from `python -m`, and a second one created by `import
+agent.agent as _aa`), and my patch hit the wrong one. The `run_turn`
+function actually being called resolved `call_with_retry` from the
+`__main__` namespace, which wasn't patched. Fix: patch
+`sys.modules[__name__]` instead. Tedious to debug, obvious in
+retrospect.
+
+**rich interprets `[label]`-prefixed strings as markup.**
+`console.print(f"[tool:bad_thing] failed")` lost the prefix entirely
+because rich parsed it as a (malformed) markup tag. Wrap in `Text(...)`
+to opt out. Generic principle: any user-supplied or computed string
+going through rich's `print()` should either be escaped or wrapped in
+`Text()` to avoid silent loss.
+
+**Multi-tool turns require *one* user message with *all* tool_results.**
+The Anthropic API is strict about this: emit several `tool_use` blocks
+in one assistant response, and the next user message must contain a
+`tool_result` block for each one. A common bug shape would be
+dispatching each tool and immediately appending a tool_result message,
+then calling the API again — that breaks the contract and the API will
+422 you. The loop in `run_turn` collects all tool_results from one
+iteration into a single user message before the next API call.
+
+### Reusable patterns
+
+- **Renderer protocol + SilentRenderer** for any agent loop. Makes the
+  loop testable without `mock.patch('sys.stdout')` hacks.
+- **System prompt as projection of architectural decisions.** Every
+  load-bearing instruction in the prompt should have a SPEC reference;
+  every SPEC contract that affects runtime behaviour should appear in
+  the prompt. The two stay in sync because they're written together.
+- **End-to-end live tests catch a different class of bug** than
+  deterministic unit tests. A few cents per test run is cheap insurance
+  against API-shape mismatches that the type checker can't see.
+- **Patch `sys.modules[__name__]`** when monkey-patching for tests in a
+  module that may run as either `__main__` or its dotted name.
+- **Cap tool_result size** before sending back to the model. A scenario
+  query that returns 100 categories shouldn't blow next-turn context.
+  Trimming for the model's view; full result still in the transcript.
+
 ### Reusable patterns
 
 - **AskUserQuestion before plan, ExitPlanMode after.** Four design

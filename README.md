@@ -60,7 +60,7 @@ The full spec is in [SPEC_AGENT.md](SPEC_AGENT.md). The highlights:
 | 2 | SQLite schema + CSV ingestion | ✅ |
 | 3 | SQLite-first rule lookup wrapper | ✅ |
 | 4 | Tool implementations (11 tools) + Docker | ✅ |
-| 5 | Agent loop | ⏳ |
+| 5 | Agent loop (Sonnet 4.6 + Haiku 4.5 + prompt caching) | ✅ |
 | 6 | UI (optional — CLI demo first) | ⏳ |
 
 Methodology notes and surprises from each step are logged in
@@ -77,7 +77,7 @@ Desktop itself.
 ```powershell
 # One-time
 docker compose build
-cp .env.example .env       # then fill in ANTHROPIC_API_KEY if you want suggest_classification
+copy .env.example .env       # then fill in ANTHROPIC_API_KEY
 
 # Regenerate the synthetic dataset (committed, but you can re-roll)
 docker compose run --rm agent python data/synthetic/generate_synthetic.py
@@ -85,11 +85,43 @@ docker compose run --rm agent python data/synthetic/generate_synthetic.py
 # Load it into SQLite (creates data/finance.db on the host via volume mount)
 docker compose run --rm agent python db/migrate.py --replace
 
-# Verify everything works end-to-end
+# Talk to the agent — interactive REPL
+docker compose run --rm -it agent python -m agent
+```
+
+Sample conversation:
+```
+You: What did I spend on this year?
+› get_spending_summary(months=12)
+╭ get_spending_summary ──────────────────────────────────╮
+│ grand_total: £64,287.16   monthly_avg: £5,357.26       │
+╰────────────────────────────────────────────────────────╯
+Agent: Over the last 12 months you've spent around £64,300 —
+44% fixed costs, 56% discretionary. House/Mortgage is your
+biggest single category at £17,040…
+[in 911 · out 642 · cache_read 0 · $0.0143 · turn 1]
+
+You: What if my mortgage rate goes from 2% to 4%?
+› model_scenario(scenario='rate_change', parameters={...})
+╭ model_scenario ────────────────────────────────────────╮
+│ scenario: rate_change                                  │
+│ current_surplus: £  265.79/mo                          │
+│ new_surplus:     £  -42.54/mo                          │
+│ gap:             £  308.33/mo                          │
+╰────────────────────────────────────────────────────────╯
+Agent: A 2% rate rise on £185k would cost you an extra
+£308/month — enough to tip you into the red…
+[in 2,279 · out 565 · cache_read 9,378 · $0.0350 · turn 2]
+```
+
+Verify each component independently:
+```powershell
 docker compose run --rm agent python -m agent.tools.state
 docker compose run --rm agent python -m agent.tools.classification
 docker compose run --rm agent python -m agent.tools.scenarios
 docker compose run --rm agent python -m agent.tool_registry
+docker compose run --rm agent python -m agent.transcript
+docker compose run --rm agent python -m agent.agent   # deterministic, no API
 ```
 
 The synthetic dataset is 18,780 transactions spanning 2011-01-01 →
@@ -133,6 +165,10 @@ financial-agent/
 ├── requirements.txt         anthropic, python-dotenv, pandas
 ├── claude_helpers.py        Anthropic client + retry wrapper + model constants
 ├── agent/
+│   ├── agent.py             conversational loop, Renderer protocol, prompt caching
+│   ├── cli.py               RichRenderer (display layer)
+│   ├── transcript.py        JSONL session logger
+│   ├── __main__.py          REPL entry: `python -m agent`
 │   ├── tools/               state, classification, scenarios
 │   └── tool_registry.py     schemas + dispatch (11 tools)
 ├── classifier/
