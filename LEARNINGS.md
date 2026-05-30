@@ -443,6 +443,20 @@ This is a clean pattern for cost-routing (the SPEC §3.3 case) but it
 also generalises: any tool that's really "ask a cheaper model for a
 draft" can hide that fact from the orchestrator.
 
+**Live LLM validation surfaced real taxonomy gaps, not bugs.**
+Running `suggest_classification` against 5 distinct memo patterns showed
+Haiku staying strictly within the taxonomy (no hallucinated categories)
+but picking obviously-wrong sub2s for merchants the existing taxonomy
+doesn't cover: NETFLIX, DISNEY+, APPLE.COM all landed in
+`Leisure/subscription/music` because there's no `video` or `streaming`
+sub2. TRAINLINE.COM landed in `Transport/taxi` because there's no
+`rail`. AIRBNB landed in `Leisure/entertainment` because there's no
+`Travel` main. The behaviour is correct — "stay in the taxonomy" is the
+guardrail we want — but it reveals that the inherited taxonomy reflects
+this user's historical real spending, not a forward-looking superset.
+Phase 2 (when the hardcoded chain migrates into the rules table) is the
+natural time to evolve sub-categories with the agent's help.
+
 ### Reusable patterns
 
 - **AskUserQuestion before plan, ExitPlanMode after.** Four design
