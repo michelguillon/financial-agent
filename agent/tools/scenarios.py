@@ -380,6 +380,13 @@ def model_scenario(
         new_rate = float(parameters["new_rate"])
         balance = float(parameters["mortgage_balance"])
 
+        # Be liberal about percentage vs decimal: 2 and 0.02 both mean 2%.
+        # Anything >= 1 can't sensibly be a mortgage rate as a decimal, so
+        # treat both rates as percentages and normalise.
+        if cur_rate >= 1 or new_rate >= 1:
+            cur_rate /= 100
+            new_rate /= 100
+
         # Simple interest-delta approximation: annual cost = balance * (new - cur).
         # Captures the right monthly magnitude for budgeting without needing
         # the remaining term. A true amortisation recalc could be a Phase 2
@@ -507,7 +514,8 @@ SCHEMAS = [
                         "Scenario-specific params. job_loss: "
                         "{income_reduction_pct} OR {new_monthly_income}. "
                         "rate_change: {current_rate, new_rate, mortgage_balance, "
-                        "effective_date?}. "
+                        "effective_date?} — rates accepted as either decimals "
+                        "(0.02 = 2%) or percentages (2 = 2%); both work. "
                         "expense_change: {category, monthly_delta}."
                     ),
                 },
