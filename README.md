@@ -57,9 +57,9 @@ The full spec is in [SPEC_AGENT.md](SPEC_AGENT.md). The highlights:
 | Step | Component | Status |
 |------|-----------|--------|
 | 1 | Synthetic data generator (15y of UK transactions) | ✅ |
-| 2 | SQLite schema + CSV ingestion | ⏳ |
-| 3 | SQLite-first rule lookup wrapper | ⏳ |
-| 4 | Tool implementations (classification + scenario + state) | ⏳ |
+| 2 | SQLite schema + CSV ingestion | ✅ |
+| 3 | SQLite-first rule lookup wrapper | ✅ |
+| 4 | Tool implementations (11 tools) + Docker | ✅ |
 | 5 | Agent loop | ⏳ |
 | 6 | UI (optional — CLI demo first) | ⏳ |
 
@@ -71,15 +71,30 @@ reusable, not just the *what*.
 
 ## Try it
 
-The synthetic dataset is committed (no API key, no setup required):
+Everything runs in Docker — no local Python install needed beyond Docker
+Desktop itself.
 
 ```powershell
-python data/synthetic/generate_synthetic.py
+# One-time
+docker compose build
+cp .env.example .env       # then fill in ANTHROPIC_API_KEY if you want suggest_classification
+
+# Regenerate the synthetic dataset (committed, but you can re-roll)
+docker compose run --rm agent python data/synthetic/generate_synthetic.py
+
+# Load it into SQLite (creates data/finance.db on the host via volume mount)
+docker compose run --rm agent python db/migrate.py --replace
+
+# Verify everything works end-to-end
+docker compose run --rm agent python -m agent.tools.state
+docker compose run --rm agent python -m agent.tools.classification
+docker compose run --rm agent python -m agent.tools.scenarios
+docker compose run --rm agent python -m agent.tool_registry
 ```
 
-Outputs `data/synthetic/transactions_synthetic.csv` — 18,780 transactions
-spanning 2011-01-01 → 2025-12-31 across 5 accounts (current, savings, three
-credit cards). Deterministic via fixed seed, stdlib only.
+The synthetic dataset is 18,780 transactions spanning 2011-01-01 →
+2025-12-31 across 5 accounts (current, savings, three credit cards).
+Deterministic, stdlib only.
 
 Categories follow the taxonomy in [SPEC_AGENT.md §4](SPEC_AGENT.md#4-database-schema).
 About 5% of the variable spend is intentionally tagged `Missing` (recognisable
@@ -110,13 +125,25 @@ and `logs/` can never be staged accidentally.
 
 ```
 financial-agent/
-├── SPEC_AGENT.md          architecture spec
-├── LEARNINGS.md           methodology log, one entry per build step
-├── README.md              this file
-├── data/
-│   ├── synthetic/         committed — generator + 15y of fake transactions
-│   └── real/              gitignored — never enters the repo
-├── agent/                 (Step 4–5) tools and agent loop
-├── classifier/            (Step 3) rule lookup + redacted parser
-└── db/                    (Step 2) schema, migration, helpers
+├── SPEC_AGENT.md            architecture spec
+├── LEARNINGS.md             methodology log, one entry per build step
+├── README.md                this file
+├── Dockerfile               python:3.13-slim, non-root agentuser
+├── docker-compose.yml       dev convenience: volume-mounts data/ and logs/
+├── requirements.txt         anthropic, python-dotenv, pandas
+├── claude_helpers.py        Anthropic client + retry wrapper + model constants
+├── agent/
+│   ├── tools/               state, classification, scenarios
+│   └── tool_registry.py     schemas + dispatch (11 tools)
+├── classifier/
+│   ├── bank_statement_parser.py  redacted copy of the private classifier
+│   └── rule_lookup.py            SQLite-first wrapper
+├── db/
+│   ├── schema.sql           CREATE TABLEs from SPEC §4
+│   ├── database.py          connection helpers, DATA_DIR, get_data_source
+│   └── migrate.py           CSV → SQLite ingest
+└── data/
+    ├── finance.db           gitignored, SQLite store
+    ├── synthetic/           committed — generator + 15y of fake transactions
+    └── real/                gitignored — never enters the repo
 ```

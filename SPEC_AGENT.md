@@ -69,9 +69,32 @@ All of this is explicit in the code. Loop termination, multi-tool handling, erro
 
 **Framework path:** LangGraph is the production successor once these fundamentals are understood. Not this project.
 
-### 3.3 — Model: Claude (claude-sonnet-4-20250514)
+### 3.3 — Model routing: Sonnet 4.6 for the agent loop, Haiku 4.5 for classification
 
-Chosen for tool use quality and the portfolio context. The `mistral_helpers.py` pattern from the RAG project carries forward as `claude_helpers.py` — same `call_with_retry()` pattern, different API shape.
+**Decision:** Two models, routed by task complexity. Not a single model for everything.
+
+| Component | Model | Reason |
+|-----------|-------|--------|
+| Main agent loop (conversation, tool selection, scenario reasoning, recommendations) | `claude-sonnet-4-6` | Requires genuine reasoning over ambiguous financial questions and multi-step tool results |
+| `suggest_classification()` internal call | `claude-haiku-4-5-20251001` | Short structured input (memo + amount), well-defined output (category + regex), no ambiguity — Haiku handles this class of task easily |
+
+**What this means in practice:**
+The agent loop always runs on Sonnet 4.6. One tool — `suggest_classification()` — makes its own internal API call using Haiku 4.5. The agent receives the classification suggestion as a tool result and never needs to know which model produced it. The routing is invisible to the agent loop.
+
+**Why Haiku for classification specifically:**
+Classification calls will be the most frequent in the system — processing a backlog of `Missing` transactions means many calls per session. The input is always short (a memo string, an amount, an account name). The output is always structured (4-level category + a regex pattern + a rationale). This is exactly the task profile where Haiku performs at the same quality as Sonnet at ~20x lower cost.
+
+**What stays on Sonnet:**
+- Main conversation and intent understanding
+- Scenario interpretation (reading tool results, generating recommendations)
+- `set_agent_state()` decisions (requires judgment about what's worth persisting)
+- Human-in-the-loop approval presentation
+- Anything involving ambiguous or open-ended financial reasoning
+
+**What this teaches:**
+Model routing by task complexity is a standard production pattern. The principle: use the most capable model only where capability is the constraint. For structured, well-defined subtasks, a smaller model is not a compromise — it's the correct choice.
+
+**Note on Sonnet versions:** Sonnet 4.5 and 4.6 are priced identically ($3/$15 per MTok). Switching Sonnet versions does not reduce cost. The tiers are the pricing unit, not the version within a tier.
 
 Tool use API shape (Anthropic-specific):
 ```python
@@ -80,7 +103,58 @@ Tool use API shape (Anthropic-specific):
 
 # We inject the result:
 {"type": "tool_result", "tool_use_id": "...", "content": "..."}
+
+# Model constants — define once, use everywhere
+AGENT_MODEL = "claude-sonnet-4-6"               # main loop
+CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"  # suggest_classification() only
 ```
+
+### Cost levers beyond model routing
+
+Model selection is the first lever. Two more apply directly to this project:
+
+**Prompt caching — 90% off repeated input**
+
+Every turn in a conversation resends the system prompt and the agent_state snapshot. These are identical across turns within a session. Marking them as cacheable means the first turn pays full input price; every subsequent turn pays 10% on those tokens.
+
+```python
+# System prompt block with cache_control
+{
+    "type": "text",
+    "text": SYSTEM_PROMPT,
+    "cache_control": {"type": "ephemeral"}
+}
+
+# Agent state snapshot — also cacheable if state hasn't changed this turn
+{
+    "type": "text",
+    "text": format_agent_state(state),
+    "cache_control": {"type": "ephemeral"}
+}
+```
+
+For a 10-turn scenario conversation with a 2K token system prompt + state snapshot, caching reduces input cost on those tokens by ~90% across turns 2–10. At Sonnet 4.6 rates, a typical cached conversation costs ~$0.05–0.10 total.
+
+**Batch API — 50% off async classification**
+
+Processing a backlog of `Missing` transactions is not a real-time task. The user submits the batch and checks back. This is exactly the Batch API use case: 50% discount across all models, results returned asynchronously.
+
+Haiku 4.5 + Batch API = $0.50/$2.50 per million tokens — effectively negligible for personal use volumes.
+
+```python
+# Batch classification: use for bulk Missing transaction processing
+# Interactive classification (human reviewing one at a time): standard API
+
+BATCH_THRESHOLD = 10  # if more than 10 Missing transactions, use Batch API
+```
+
+**Effective cost summary:**
+
+| Task | Model | Mechanism | Rate |
+|------|-------|-----------|------|
+| Conversation loop | Sonnet 4.6 | Prompt caching on system + state | ~$0.05–0.10 / conversation |
+| `suggest_classification()` interactive | Haiku 4.5 | Standard | ~$0.001 / call |
+| Bulk `Missing` backlog (>10 transactions) | Haiku 4.5 | Batch API | ~$0.0005 / call |
 
 ### 3.4 — Classification engine migration: Two-phase
 
@@ -124,12 +198,55 @@ All tool implementations accept an optional `source` parameter that defaults to 
 
 ```
 data/
-  real/          ← gitignored, .gitignore entry
+  finance.db     ← gitignored, SQLite store
+  real/          ← gitignored
     *.csv        ← original bank exports
   synthetic/     ← committed
     transactions_synthetic.csv
     generate_synthetic.py
 ```
+
+### 3.7 — Containerisation
+
+**Decision:** Everything runs in a Docker container. Mirrors the sibling
+`../banking` project's pattern: `python:3.13-slim`, non-root `agentuser`
+(uid 1000), deps installed from `requirements.txt`, no fixed `ENTRYPOINT`
+so any module can be invoked ad-hoc via `docker compose run`.
+
+**Why containerisation matters for this project specifically:**
+- Deployment target is Ubuntu Server 24.04 (M720q home server); development
+  is on Windows. Docker eliminates the cross-platform drift that would
+  otherwise plague this.
+- The agent has external dependencies (Anthropic SDK, pandas). Containerising
+  them keeps the host Python clean and pins versions for the deployment
+  target.
+- Persistent state (`finance.db`) lives on a bind-mounted directory, so
+  rebuilds don't lose it.
+
+**Volume mount contract:**
+```yaml
+volumes:
+  - ./data:/app/data    # finance.db, synthetic CSV, real CSVs
+  - ./logs:/app/logs    # conversation logs (Step 5)
+```
+
+Mounting the `data/` *directory* (not the `finance.db` file) avoids
+Docker's "file mount on a missing path creates a directory" gotcha on
+fresh checkouts. `finance.db` is created at `data/finance.db` on first
+migration.
+
+**Workflow:**
+```bash
+docker compose build
+docker compose run --rm agent python db/migrate.py --replace
+docker compose run --rm agent python -m agent.tool_registry
+docker compose run --rm -it agent bash          # interactive shell
+docker compose run --rm -it agent python -m agent.agent  # Step 5 REPL
+```
+
+Code changes require `docker compose build` to take effect (the container's
+code is COPY-baked at build time; bind-mounting source would re-introduce
+host/container Python-version drift).
 
 ---
 
@@ -196,12 +313,9 @@ CREATE TABLE agent_state (
 | Transport | Automotive, taxi, tube | Petrol, Road tax, parking & fees |
 | Leisure | food/drinks, sport, subscription, entertainment | restaurant, pub, café, gym, amazon, music, newspapers |
 | Bills | utilities, Bank Fees, Charity, Household, loan | water, gas/elec, council tax, Mobile Phone, TV License, broadband, cleaner |
-| Health | Dentist, Eyecare, General, GP | glasses, Medicine |
 | Savings | Transfer, Interest | — |
 | Withdrawal | — | — |
 | Missing | — | — |
-
-> **Note on `Bills/utilities/Mobile Phone`:** historically the classifier had a separate `phone` sub2 for landline/Skype era transactions. That sub2 has been merged into `Mobile Phone` since 2026 — the SKYPE memo pattern in the classifier now also returns `Mobile Phone`. When the classifier is copied into `classifier/` per §9, update that rule accordingly.
 
 ---
 
@@ -241,7 +355,7 @@ The pattern is a regex against Memo. Category names must match existing taxonomy
 ---
 
 ```python
-add_classification_rule(
+preview_rule_application(
     pattern: str,
     category_main: str,
     category_sub: str | None,
@@ -249,9 +363,37 @@ add_classification_rule(
     details: str | None
 ) -> dict
 ```
-Writes the rule to `classification_rules` with `approved_by = 'human'` and `approved_at = now()`. Then re-runs the rule against all `Missing` transactions and updates matches. Returns: `{rules_added: 1, transactions_reclassified: N}`.
+Shows the blast radius of a candidate rule before it's committed. No DB writes. Returns:
+```json
+{
+  "would_match": 24,
+  "sample_matches": [{"id": ..., "date": ..., "amount": ..., "memo": ..., "account_name": ...}, ...],
+  "proposed_classification": {"category_main": "Leisure", ...}
+}
+```
 
-Human approval is enforced in the agent loop, not in this function — the agent presents the suggestion, the human says yes/no, then (and only then) the agent calls `add_classification_rule`.
+The agent uses this to show the user "this rule would reclassify N transactions; here are 5 of them" *before* asking for approval.
+
+---
+
+```python
+apply_classification_rule(
+    pattern: str,
+    category_main: str,
+    category_sub: str | None,
+    category_sub2: str | None,
+    details: str | None
+) -> dict
+```
+Writes the rule to `classification_rules` with `approved_by = 'human'`, `approved_at = now()`, AND retroactively updates all matching `Missing` transactions — all in one SQL transaction so partial failure rolls back. Returns: `{rules_added: 1, rule_id: N, transactions_reclassified: M}`.
+
+**Two-step flow rationale.** Rule application mutates the transactions table, so the agent must present `preview_rule_application` output to the user and receive explicit approval before calling `apply_classification_rule`. Splitting the read (preview) from the write (apply) gives the user a real chance to refuse a rule that would over-match, and it makes the conversation flow explicit:
+1. Agent calls `suggest_classification` → drafts a rule
+2. Agent calls `preview_rule_application` → shows would-match count + samples
+3. User approves
+4. Agent calls `apply_classification_rule`
+
+The approval gate is enforced by prompt instruction (Phase 1); a Phase 2 code gate could check conversation history for an approval signal before executing `apply_classification_rule`.
 
 ---
 
@@ -382,7 +524,7 @@ Per-turn:
   2. Call Claude API with tools registered
   3. If tool_use blocks present:
      a. Execute each tool
-     b. For add_classification_rule: verify human approval was given in conversation
+     b. For apply_classification_rule: verify human approval was given in conversation
      c. Append tool_results to messages
      d. Go to step 2
   4. Return assistant text response to user
@@ -390,12 +532,13 @@ Per-turn:
 ```
 
 **Human-in-the-loop enforcement for rule addition:**
-The agent cannot call `add_classification_rule` speculatively. The conversation flow is:
-1. Agent calls `suggest_classification` → shows result to user
-2. User explicitly approves ("yes", "add it", "looks right")
-3. Only then does the agent call `add_classification_rule`
+The agent cannot call `apply_classification_rule` speculatively. The conversation flow is:
+1. Agent calls `suggest_classification` → drafts a rule
+2. Agent calls `preview_rule_application` → reports how many Missing rows would be reclassified and shows samples
+3. User explicitly approves ("yes", "add it", "looks right")
+4. Only then does the agent call `apply_classification_rule`
 
-This is enforced by prompt instruction, not code gate (Phase 1). A code gate (checking conversation history for approval signal before executing the tool) is a Phase 2 hardening option.
+This is enforced by prompt instruction, not code gate (Phase 1). A code gate (checking conversation history for an approval signal before executing the tool) is a Phase 2 hardening option.
 
 ---
 
@@ -404,27 +547,32 @@ This is enforced by prompt instruction, not code gate (Phase 1). A code gate (ch
 ```
 personal-finance-agent/
 ├── agent/
-│   ├── agent.py              ← main agent loop
+│   ├── agent.py              ← main agent loop (Step 5)
 │   ├── tools/
-│   │   ├── classification.py ← get_unclassified, suggest, add_rule, list_categories
+│   │   ├── classification.py ← get_unclassified, suggest, preview/apply, list_categories
 │   │   ├── scenarios.py      ← spending_summary, income, fixed_vs_disc, model_scenario
 │   │   └── state.py          ← get/set agent_state
-│   └── tool_registry.py      ← JSON schema definitions for all tools
+│   └── tool_registry.py      ← schemas + dispatch
 ├── db/
 │   ├── schema.sql            ← CREATE TABLE statements above
 │   ├── database.py           ← SQLite connection + helpers
-│   └── migrate.py            ← one-time ingestion from CSV exports
+│   └── migrate.py            ← CSV ingestion (handles synthetic + preprocessed formats)
 ├── classifier/
-│   ├── bank_statement_parser.py   ← original script, preserved
-│   └── rule_lookup.py             ← Phase 1 addition: SQLite lookup wrapper
+│   ├── bank_statement_parser.py   ← original script, redacted per §9
+│   └── rule_lookup.py             ← Phase 1 SQLite-first wrapper
 ├── data/
+│   ├── finance.db            ← gitignored, SQLite store
 │   ├── real/                 ← gitignored
 │   └── synthetic/
 │       ├── generate_synthetic.py
 │       └── transactions_synthetic.csv
+├── Dockerfile                ← python:3.13-slim, non-root agentuser (§3.7)
+├── docker-compose.yml        ← dev convenience: mounts data/, logs/, optional .env
+├── .dockerignore
+├── requirements.txt          ← anthropic, python-dotenv, pandas
 ├── claude_helpers.py         ← adapted from mistral_helpers.py
-├── .env                      ← ANTHROPIC_API_KEY, BUDGET_DATA_DIR
-└── finance.db                ← gitignored
+├── .env                      ← gitignored; ANTHROPIC_API_KEY, optional RUN_LLM_TESTS
+└── .env.example              ← committed template
 ```
 
 ---
@@ -458,8 +606,8 @@ CLI is sufficient for the portfolio demo. React + FastAPI upgrade follows the RF
 ```
 .gitignore entries (mandatory):
   data/real/
-  finance.db
-  finance_real.db
+  data/finance.db
+  data/finance_real.db
   logs/
   .env
 ```

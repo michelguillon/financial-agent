@@ -305,3 +305,119 @@ classifier sit on `pandas` alone.
   redaction mapping — same script, different question, same answer
   format. A regression-watching tool you wrote once and keep
   recycling tends to pay back faster than tools that prove one thing.
+
+---
+
+## Step 4 — Tool implementations + Docker
+
+### Goal
+
+Build the 11 tools the agent will use (state, classification, scenarios),
+plus the infrastructure they sit on: tool registry, Anthropic API helpers,
+and the Docker container that everything runs in. Each tool needs to be
+independently verifiable so the Step 5 agent loop is a thin orchestrator
+rather than a place where bugs hide.
+
+### Methodology that worked
+
+**1. Plan before building, and force four design decisions early.**
+
+The plan up-front (model routing, rule-application flow, fixed/discretionary
+heuristic, scope of scenario tools) was four AskUserQuestion items that
+took 60 seconds to ask and saved an indeterminate amount of rework. The
+user's answer to "two-step rule application" in particular changed the
+API surface — `add_classification_rule` became two tools
+(`preview_rule_application` + `apply_classification_rule`). Catching that
+in planning rather than mid-implementation meant the SPEC, the
+tool_registry, the inline tests, and the system-prompt guidance all
+landed coherent.
+
+**2. Mirror the working pattern from a sibling project.**
+
+`claude_helpers.py` is a direct adaptation of `mistral_helpers.py` from
+the rag-pipeline project — same `call_with_retry(func, *args, max_retries,
+base_delay, **kwargs)` signature, same exponential backoff with
+`Retry-After` honouring, just different exception types. Copying a known-
+good pattern means the retry semantics are battle-tested before the agent
+ever runs. The five-line decision: "what we did before, but for this SDK."
+
+**3. Co-locate JSON schemas with the functions they describe.**
+
+Each tool module exports `SCHEMAS` next to the function bodies; the
+registry imports them and asserts every schema name has a matching
+callable. Drift between "what the API thinks the tool does" and "what the
+function actually does" becomes impossible at import time — change the
+function name and forget the schema, and `tool_registry.py` refuses to
+load.
+
+**4. Two-step destructive operations.**
+
+`preview_rule_application` answers "how many?" without writing;
+`apply_classification_rule` writes. Splitting them means the agent's
+conversation flow naturally has an approval gate built in (the user sees
+the preview before saying yes). The alternative — one tool that mutates
+and returns a count — would push the safety question into prompt-
+engineering. The split makes it a property of the API.
+
+**5. Inline smoke tests that mutate, then clean up.**
+
+The classification.py test inserts a NETFLIX rule, applies it (mutating
+24 rows), verifies the count matches the preview, then restores the rows
+and deletes the rule. Snapshotting the affected IDs *before* the mutation
+and using them to drive the restore means the test is idempotent — it
+leaves the DB exactly as it found it, runnable any number of times back-
+to-back without an external reset.
+
+### Surprises
+
+**SQLite expressions don't get PARSE_DECLTYPES converters.**
+`SELECT MAX(date) FROM transactions` returns a string, not a date,
+because converters apply only to declared columns. The fix is
+`date.fromisoformat(row["d"])`. Caught by the first scenarios.py smoke
+test — and worth flagging because every other date-column read in the
+project does come back as a date, so the inconsistency is easy to miss
+until something explodes.
+
+**Docker file-mounts on a missing host path silently create a directory.**
+The first `docker-compose.yml` had `./finance.db:/app/finance.db`. It
+worked because the file existed from Step 2 — but a fresh checkout would
+have had Docker create a *directory* called `finance.db`, breaking SQLite
+silently. Fix: move `finance.db` inside `data/` and mount the directory.
+This is the kind of bug that doesn't surface until someone else clones
+the repo three months later. Catching it before commit was a function of
+spending two extra minutes wondering "what happens on a fresh checkout?"
+
+**The image bakes the code at build time, so source edits need a rebuild.**
+First migration after the path move kept writing to `/app/finance.db`
+inside the container — because the container was running the pre-edit
+code from `COPY . .` at build time. Rebuilding (`docker compose build`)
+picks up the new code. The alternative — bind-mounting source for live
+dev — re-introduces host/container Python-version drift, which is exactly
+what Docker is here to prevent. Decision: live with the rebuild cost,
+since builds are ~10s after deps layer is cached.
+
+**Embedded LLM call as a tool result is its own architectural shape.**
+`suggest_classification` is a tool the *outer* agent loop calls, but
+internally it makes its own API call to Haiku 4.5. The agent loop never
+knows another model was involved — it just gets a structured dict back.
+This is a clean pattern for cost-routing (the SPEC §3.3 case) but it
+also generalises: any tool that's really "ask a cheaper model for a
+draft" can hide that fact from the orchestrator.
+
+### Reusable patterns
+
+- **AskUserQuestion before plan, ExitPlanMode after.** Four design
+  questions in plan mode beats four questions per implementation phase.
+- **Co-locate schema with function**; assemble the registry from the
+  per-module exports. Single source of truth, drift-impossible.
+- **Two-step destructive operations** (preview → apply) where the
+  agent is in the loop. The shape of the API enforces the safety,
+  not just the prompt.
+- **Tool-use with forced `tool_choice`** as a way to get guaranteed
+  structured output from a model call — more robust than JSON-mode
+  prompting because the schema is part of the request.
+- **Mount the directory, not the file**, for Docker bind mounts. Path
+  existence is no longer a fresh-checkout footgun.
+- **Lazy module-level connection**, with a `reset_*` helper for tests.
+  The cost of opening the SQLite DB on every call would add up across
+  a long agent session; the lazy global pays the open cost once.
