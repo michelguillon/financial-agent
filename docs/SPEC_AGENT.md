@@ -156,28 +156,28 @@ BATCH_THRESHOLD = 10  # if more than 10 Missing transactions, use Batch API
 | `suggest_classification()` interactive | Haiku 4.5 | Standard | ~$0.001 / call |
 | Bulk `Missing` backlog (>10 transactions) | Haiku 4.5 | Batch API | ~$0.0005 / call |
 
-### 3.4 — Classification engine migration: Two-phase
+### 3.4 — Classification engine migration: Two-phase ✓ Done (A1, 2026-05-31)
 
-**Phase 1 (this build):** SQLite `classification_rules` table is checked FIRST. If a rule matches, return its categories. If not, fall through to the existing hardcoded `if/elif` chain in `bank_statement_parser.py`. The hardcoded chain is preserved unchanged as the fallback.
+**Phase 1 (Steps 1–5):** SQLite `classification_rules` table checked FIRST; on miss, fall through to the hardcoded `if/elif` chain in `bank_statement_parser.py`. Both paths active.
+
+**Phase 2 (A1):** The hardcoded chain has been migrated. [`classifier/rules_seed.py`](../classifier/rules_seed.py) holds the canonical list of ~45 rules; [`db/seed_rules.py`](../db/seed_rules.py) loads them via `db/migrate.py` after every ingest. The hardcoded `categories()` is deleted. `classifier/rule_lookup.categories()` is the only path — table hit returns the row, miss returns `Missing`.
 
 ```python
 def categories(df):
-    # Phase 1 addition: check SQLite rules first
-    db_result = lookup_in_rules_table(df['Memo'])
-    if db_result:
-        return db_result
-    
-    # Original chain unchanged below:
-    if (df['Account Number'] == '20-71-74 20451770') & (df['Type'] == 'CASH'):
-        return pd.Series(['Withdrawal', None, None, None])
-    # ... (all existing rules unchanged)
-    else:
-        return pd.Series(['Missing', None, None, None])
+    hit = lookup_in_rules_table(
+        df.get("Memo"), df.get("Account Number"),
+        df.get("Type"), df.get("Amount"),
+    )
+    if hit is not None:
+        return pd.Series(list(hit))
+    return pd.Series(["Missing", None, None, None])
 ```
 
-**Phase 2 (future):** Migrate the hardcoded chain into the rules table. The Python function becomes a thin wrapper around a SQL query. All rules become inspectable, editable, and exportable. The hardcoded chain is retired.
+**Conditional rules.** Three of the ported rules condition on more than memo (cash-from-current, MTG-from-current, PRET under £5). The `classification_rules` schema gained four optional columns to express these without exception code: `account_match`, `type_match`, `amount_min`, `amount_max`. Convention: `amount_min` is inclusive, `amount_max` is exclusive (mirrors `range(start, stop)`), comparison is against `abs(Amount)`.
 
-Phase 2 is documented here as the intended end state but is explicitly out of scope for this build.
+**REGEXP semantics.** SQLite's REGEXP operator is backed by `re.match` (start-anchored), matching the original chain's semantics. Patterns with `.*` prefix opt into "match anywhere" explicitly; patterns without it match only at the start of the memo. `^` is redundant but harmless.
+
+**Round-trip verifier.** [`tests/test_round_trip.py`](../tests/test_round_trip.py) runs every synthetic CSV row through `rule_lookup.categories()` and asserts agreement with the CSV's pre-assigned category. 100% green is the regression net for any future rule edit.
 
 ### 3.5 — Database: SQLite
 
@@ -276,19 +276,25 @@ CREATE INDEX idx_transactions_category ON transactions(category_main, category_s
 CREATE INDEX idx_transactions_source ON transactions(data_source);
 CREATE INDEX idx_transactions_missing ON transactions(category_main) WHERE category_main = 'Missing';
 
--- Rules added by the agent (checked before hardcoded chain)
+-- All classification rules. After A1, this is the authoritative source —
+-- the hardcoded chain in bank_statement_parser.py is gone.
 CREATE TABLE classification_rules (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern       TEXT NOT NULL,             -- regex against Memo field
-    category_main TEXT NOT NULL,
-    category_sub  TEXT,
-    category_sub2 TEXT,
-    details       TEXT,
-    added_by      TEXT DEFAULT 'agent',      -- 'agent' | 'manual'
-    approved_by   TEXT,                      -- 'human' (set on approval)
-    approved_at   DATETIME,
-    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-    times_matched INTEGER DEFAULT 0          -- updated when rule matches a transaction
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern        TEXT NOT NULL,            -- regex against Memo (start-anchored via re.match)
+    category_main  TEXT NOT NULL,
+    category_sub   TEXT,
+    category_sub2  TEXT,
+    details        TEXT,
+    -- Optional conditions (NULL = no constraint). See classifier/rule_lookup.py.
+    account_match  TEXT,                     -- exact Account Number match
+    type_match     TEXT,                     -- exact Type match (e.g. 'CASH')
+    amount_min     REAL,                     -- abs(Amount) >= amount_min (inclusive)
+    amount_max     REAL,                     -- abs(Amount) <  amount_max (exclusive)
+    added_by       TEXT DEFAULT 'agent',     -- 'seed' (from rules_seed.py) | 'agent' | 'manual'
+    approved_by    TEXT,
+    approved_at    DATETIME,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    times_matched  INTEGER DEFAULT 0
 );
 
 -- Cross-session knowledge store
@@ -303,19 +309,22 @@ CREATE TABLE agent_state (
 );
 ```
 
-**Category taxonomy** (from existing `bank_statement_parser.py`):
+**Category taxonomy** (post-A2; canonical source is `classifier/rules_seed.py`):
 
 | Main | Sub examples | Sub2 examples |
 |------|-------------|---------------|
 | Income | Salary | — |
 | House | Mortgage, Maintenance | kitchen/bathroom |
 | Shopping | Groceries, Household, Clothes, CreditCard, electronics | Supermarket, Corner Shop, veg box, wine, DIY |
-| Transport | Automotive, taxi, tube | Petrol, Road tax, parking & fees |
-| Leisure | food/drinks, sport, subscription, entertainment | restaurant, pub, café, gym, amazon, music, newspapers |
+| Transport | Automotive, taxi, tube, **rail** | Petrol, Road tax, parking & fees |
+| Leisure | food/drinks, sport, subscription, entertainment | restaurant, pub, café, gym, amazon, music, newspapers, **video** |
 | Bills | utilities, Bank Fees, Charity, Household, loan | water, gas/elec, council tax, Mobile Phone, TV License, broadband, cleaner |
+| **Travel** | **accommodation** | **hotel** |
 | Savings | Transfer, Interest | — |
 | Withdrawal | — | — |
 | Missing | — | — |
+
+**Bold** = added by A2. Deliberately *not* matched by seed rules: NETFLIX/DISNEY+ (would go to `Leisure/subscription/video`), AIRBNB (would go to `Travel/accommodation`), TRAINLINE (would go to `Transport/rail`). These stay in the `NOISE_MEMOS` pool so the synthetic dataset keeps a Missing backlog the agent can demo classification with.
 
 ---
 

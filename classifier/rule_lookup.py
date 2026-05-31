@@ -1,18 +1,22 @@
-"""rule_lookup.py — Phase 1 SQLite-first wrapper around the hardcoded
-categories() chain in bank_statement_parser.
+"""rule_lookup.py — SQLite-backed classification lookup.
 
-SPEC §3.4: when categorising a row, consult the `classification_rules`
-table first; on miss, fall through to the unchanged hardcoded chain.
-That hardcoded chain stays the fallback for everything not yet promoted
-into a SQL rule.
+A1 (Phase 2 SPEC §3.4) migrated the hardcoded chain in
+bank_statement_parser.py into the classification_rules table; this module
+is now the only path. On miss the result is "Missing" with NULL subs.
 
-Phase 2 (out of scope) migrates the hardcoded chain itself into the
-rules table.
+A rule fires when:
+  - its `pattern` REGEXPs the row's Memo (case-insensitive); AND
+  - any of its optional conditions (account_match, type_match,
+    amount_min, amount_max) either match or are NULL.
+
+Order of insertion = order of evaluation (lowest id wins). The
+classifier/rules_seed.py module is the canonical source list; db/seed_rules.py
+loads it.
 
 Usage:
 
     from classifier.rule_lookup import categories
-    result = categories(df_row)   # drop-in replacement for the original
+    result = categories(df_row)   # pd.Series([main, sub, sub2, details])
 
 The first call opens a module-level connection to the project DB.
 Tests can call `reset_connection()` to drop it.
@@ -26,14 +30,11 @@ from pathlib import Path
 
 import pandas as pd
 
-# Allow `python classifier/rule_lookup.py` or `from classifier.rule_lookup ...`
-# to find the sibling db package.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from db.database import get_connection, register_regexp  # noqa: E402
-from classifier.bank_statement_parser import categories as _hardcoded_categories  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -60,24 +61,47 @@ def reset_connection() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lookup + wrapper
+# Lookup
 # ---------------------------------------------------------------------------
 
-def lookup_in_rules_table(memo: str | None) -> tuple | None:
-    """Search classification_rules for a regex match on memo.
+_LOOKUP_SQL = """
+    SELECT category_main, category_sub, category_sub2, details
+    FROM classification_rules
+    WHERE ? REGEXP pattern
+      AND (account_match IS NULL OR account_match = ?)
+      AND (type_match    IS NULL OR type_match    = ?)
+      AND (amount_min    IS NULL OR ? >= amount_min)
+      AND (amount_max    IS NULL OR ? <  amount_max)
+    ORDER BY id LIMIT 1
+"""
+# Convention: amount_min is INCLUSIVE (>=), amount_max is EXCLUSIVE (<).
+# Mirrors Python's range(start, stop). The seed PRET-café rule uses
+# amount_max=5 to mean "strictly under £5" — preserving the original
+# hardcoded chain's `abs(amount) < 5` semantics.
+
+
+def lookup_in_rules_table(
+    memo: str | None,
+    account_number: str | None = None,
+    type_: str | None = None,
+    amount: float | None = None,
+) -> tuple | None:
+    """Search classification_rules for a matching row.
 
     Returns (category_main, category_sub, category_sub2, details) on hit,
     None on miss. Earlier rules (lower id) win on conflict.
+
+    `amount` is compared as absolute value — the convention is that
+    amount_min/amount_max in the rules table refer to the cost of the
+    transaction regardless of sign.
     """
     if memo is None:
         return None
+    abs_amount = abs(amount) if amount is not None else None
     conn = _get_conn()
     row = conn.execute(
-        "SELECT category_main, category_sub, category_sub2, details "
-        "FROM classification_rules "
-        "WHERE ? REGEXP pattern "
-        "ORDER BY id LIMIT 1",
-        (memo,),
+        _LOOKUP_SQL,
+        (memo, account_number, type_, abs_amount, abs_amount),
     ).fetchone()
     if row is None:
         return None
@@ -86,15 +110,16 @@ def lookup_in_rules_table(memo: str | None) -> tuple | None:
 
 
 def categories(df: pd.Series) -> pd.Series:
-    """Drop-in replacement for bank_statement_parser.categories.
+    """Classify one transaction. Returns pd.Series([main, sub, sub2, details]).
 
-    1. Check the SQLite rules table.
-    2. On miss, fall through to the unchanged hardcoded chain.
-
-    The same pd.Series shape as the original is returned, so existing
-    callers (the Budget class, the migration tool) don't need to change.
+    Falls back to ["Missing", None, None, None] when no rule matches.
     """
-    hit = lookup_in_rules_table(df.get("Memo"))
+    hit = lookup_in_rules_table(
+        df.get("Memo"),
+        df.get("Account Number"),
+        df.get("Type"),
+        df.get("Amount"),
+    )
     if hit is not None:
         return pd.Series(list(hit))
-    return _hardcoded_categories(df)
+    return pd.Series(["Missing", None, None, None])

@@ -880,3 +880,120 @@ shape it needs:
 
 Final pytest suite: **47 deterministic tests in ~8s**, 2 LLM tests
 (`@pytest.mark.llm`) opt-in via `RUN_LLM_TESTS=1` for ~$0.10/run.
+
+---
+
+## A1 + A2 — rules into table + taxonomy expansion
+
+### Goal
+
+Migrate the hardcoded `if/elif` chain in `bank_statement_parser.py:categories()`
+(~40 regex rules) into rows of `classification_rules`, and extend the
+taxonomy with `Travel`, `Transport/rail`, `Leisure/subscription/video` so
+the agent has somewhere correct to put NETFLIX / TRAINLINE / AIRBNB /
+DISNEY+ when it processes the Missing backlog.
+
+### Methodology that worked
+
+**1. Round-trip verifier as the contract.**
+
+The whole migration was unsafe-by-default — losing one rule or
+mis-ordering them would silently mis-classify thousands of rows. The fix
+was to write the verifier FIRST (before deleting any old code), get it to
+100% agreement on the unchanged synthetic CSV, and only then delete the
+hardcoded chain. The test exists at
+[tests/test_round_trip.py](../tests/test_round_trip.py) — read every
+synthetic row, classify via the new table-driven path, assert match
+against the CSV's pre-assigned categories. First green run = "the
+migration didn't lose anything"; future red run = "you just broke a
+rule, fix it before merging".
+
+This is a different shape from B2's pytest suite — B2 was testing
+*behaviour*, this is testing *equivalence to a known-good baseline*.
+Both have a role.
+
+**2. Schema-extends-for-conditional-rules over special-case code.**
+
+Three of the ported rules condition on more than memo (cash-from-current,
+mortgage-from-current, PRET under £5). Two options were on the table:
+keep a tiny 3-rule hardcoded chain alongside the table for those, or
+extend the schema with optional columns and put EVERYTHING in the table.
+We picked the schema extension — four nullable columns
+(`account_match`, `type_match`, `amount_min`, `amount_max`) cover the
+existing cases and any future agent-added conditions. "Table is the
+source of truth" became a real invariant, not a 95%-true approximation.
+
+Convention chosen: `amount_min` inclusive (`>=`), `amount_max` exclusive
+(`<`). Mirrors Python's `range(start, stop)`. The original chain used
+`abs(amount) < 5` so a £5.00 PRET went to restaurant; our seed encodes
+this as `amount_max: 5` (NOT 4.99) and the SQL matches exactly. Worth
+documenting because the off-by-one is otherwise the kind of bug that
+takes an afternoon to find.
+
+### Surprises
+
+**`re.match` vs `re.search` semantics.** The first round-trip run after
+seeding failed because SQLite's REGEXP (using `re.search`) matched THE
+ECONOMIST against the gas/electric pattern `E.ON|EDF ENERGY` — `E.ON`
+matches "E" + any char + "ON", which appears mid-string in
+"THE ECONOMIST". The original hardcoded chain used `re.match`
+(start-anchored), and the existing rule patterns relied on that
+implicitly — patterns without `.*` prefix were start-anchored, patterns
+with `.*` opted into "anywhere". Fix: change `db/database.py:_regexp`
+from `re.search` to `re.match`. This preserved the original semantics
+across all patterns without rewriting any of them. Documented in the
+`_regexp` docstring so future agent-added rules know the convention.
+
+Lesson: when adopting an existing regex chain into a new evaluation
+engine, run the round-trip verifier as the very first step after the
+seed lands — bugs at the regex-engine level are invisible to
+spot-checks but jump out the moment you compare every row.
+
+**Migration order matters more than I expected.** PRET café (amount<5)
+must come BEFORE the restaurant rule in `RULES_SEED`, otherwise the
+restaurant rule's broader memo pattern fires first. Same for ^MTG
+mortgage before any generic memo match that could swallow it. The
+ordering is brittle but inspectable — a future test could assert
+"every rule's pattern doesn't match an earlier rule's example memo"
+to catch reorderings, but the round-trip verifier already does this
+implicitly.
+
+### The A2 / "Missing backlog" tension
+
+The Missing backlog is a deliberate demo feature — the agent's
+classification loop needs unclassified rows to chew on. A2 adds the
+right categories (Travel, rail, video) but also threatens to empty the
+backlog if it adds matching seed rules for NETFLIX/AIRBNB/TRAINLINE
+themselves.
+
+Resolution: split "what's in the taxonomy" from "what gets
+auto-classified by seed rules". Generator emits baseline pre-classified
+rows (BOOKING.COM → Travel, AVANTI WEST COAST → Transport/rail, NOW TV
+→ Leisure/subscription/video) so `list_categories()` reports the new
+mains/subs. NETFLIX/AIRBNB/TRAINLINE/DISNEY+ stay in `NOISE_MEMOS` with
+no matching seed rules, so they keep landing as Missing. The agent
+demos by classifying them — *into the new taxonomy that now exists*.
+
+This shape generalises: when adding a category, decide whether existing
+"unknown" merchants should automatically slot into it or remain Missing
+for the agent loop. The demo angle and the cleanup angle pull in
+opposite directions; the right answer is context-dependent and worth a
+conscious choice.
+
+### Hand-off to A3
+
+A3 (`extend_taxonomy` tool) is now a small follow-up. The shape:
+- Agent tool that takes `(main, sub, sub2)` + an optional list of
+  example merchant patterns to seed as rules.
+- Preview/apply pair (per the project default): preview shows "this
+  would add a new category and create N rules"; apply inserts a new
+  row in a `taxonomy_extensions` audit log + writes the new rules with
+  `added_by='agent'`.
+- Round-trip verifier still passes because `added_by='seed'` rows are
+  unchanged; new rows are agent-added.
+
+### Cost
+
+A1 + A2 combined edit: ~50 minutes of model time, $0 in API costs
+(round-trip verifier is deterministic). The final LLM-included test
+run cost ~$0.10. Total: ~$0.10 for the whole bundle.

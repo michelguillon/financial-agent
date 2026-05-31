@@ -90,13 +90,18 @@ def get_data_source() -> str:
 def _regexp(pattern: str | None, value: str | None) -> bool:
     """Backing function for SQLite's REGEXP operator.
 
+    Uses `re.match` (start-anchored) to match the original hardcoded
+    chain's semantics — patterns with a `.*` prefix opt into "match
+    anywhere" explicitly, patterns without it match only at the start of
+    the memo. `^` in a pattern is redundant but harmless.
+
     Returns False (not error) on NULL inputs or invalid patterns, so a
     single bad rule can't crash queries that scan many rows.
     """
     if pattern is None or value is None:
         return False
     try:
-        return re.search(pattern, value, re.IGNORECASE) is not None
+        return re.match(pattern, value, re.IGNORECASE) is not None
     except re.error:
         return False
 

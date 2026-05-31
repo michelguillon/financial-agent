@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from db import database  # noqa: E402
 from db.migrate import ingest  # noqa: E402
+from db.seed_rules import seed as seed_rules  # noqa: E402
 
 SYNTHETIC_CSV = PROJECT_ROOT / "data" / "synthetic" / "transactions_synthetic.csv"
 
@@ -36,6 +37,7 @@ def seed_db(tmp_path_factory) -> Path:
     path = tmp_path_factory.mktemp("seed") / "seed.db"
     with database.open_db(path) as conn:
         ingest(SYNTHETIC_CSV, conn, source_default="synthetic", replace=False)
+        seed_rules(conn)
     return path
 
 

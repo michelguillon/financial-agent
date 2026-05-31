@@ -251,6 +251,14 @@ def main(argv: list[str] | None = None) -> int:
     with open_db(args.db) as conn:
         inserted = ingest(args.csv, conn, args.source, args.replace)
         print(f"\nInserted {inserted:,} rows.")
+
+        # Always re-seed the canonical rules (deletes added_by='seed' rows
+        # and re-inserts from classifier/rules_seed.py). Agent-added rules
+        # (added_by='agent') are left alone.
+        from db.seed_rules import seed as seed_rules
+        n_rules = seed_rules(conn)
+        print(f"Seeded {n_rules} classifier rules.")
+
         validate(conn, args.source)
     return 0
 

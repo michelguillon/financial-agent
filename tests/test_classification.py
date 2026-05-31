@@ -22,9 +22,20 @@ def test_get_unclassified_returns_missing_rows(tmp_db):
 def test_list_categories_has_expected_mains(tmp_db):
     taxonomy = list_categories()
     expected = {"Income", "House", "Shopping", "Transport", "Leisure",
-                "Bills", "Savings", "Withdrawal", "Health"}
+                "Bills", "Savings", "Withdrawal", "Health", "Travel"}
     missing = expected - set(taxonomy.keys())
     assert not missing, f"taxonomy missing main categories: {missing}"
+
+
+def test_a2_new_subs_present_in_taxonomy(tmp_db):
+    taxonomy = list_categories()
+    assert "rail" in taxonomy.get("Transport", {}), \
+        "A2: Transport/rail missing from taxonomy"
+    leisure_sub_video = taxonomy.get("Leisure", {}).get("subscription", [])
+    assert "video" in leisure_sub_video, \
+        f"A2: Leisure/subscription/video missing; got {leisure_sub_video}"
+    assert "accommodation" in taxonomy.get("Travel", {}), \
+        "A2: Travel/accommodation missing from taxonomy"
 
 
 def test_preview_does_not_mutate(tmp_db):

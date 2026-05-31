@@ -41,22 +41,37 @@ CREATE INDEX IF NOT EXISTS idx_transactions_missing
 
 
 -- ---------------------------------------------------------------------------
--- classification_rules: regex rules the agent has added (with human
--- approval) over time. Checked BEFORE the hardcoded if/elif chain in
--- bank_statement_parser.py during Phase 1.
+-- classification_rules: regex rules the classifier uses to bucket
+-- transactions into the taxonomy. Phase 2 (A1) migrated the previously
+-- hardcoded chain in bank_statement_parser.py into rows here, so the
+-- table is the authoritative source of truth.
+--
+-- Most rules condition only on Memo (pattern REGEXP). The four optional
+-- columns below let a rule additionally require an exact Account Number,
+-- exact Type, or an Amount within [amount_min, amount_max] (absolute
+-- value — see classifier/rule_lookup.py). NULL = no condition.
+--
+-- `added_by`: 'seed' for rows inserted by db/seed_rules.py from
+-- classifier/rules_seed.py; 'agent' for rows the agent adds at runtime
+-- via apply_classification_rule. The split lets the seed step delete +
+-- re-insert its own rows without touching agent-added ones.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS classification_rules (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern       TEXT NOT NULL,
-    category_main TEXT NOT NULL,
-    category_sub  TEXT,
-    category_sub2 TEXT,
-    details       TEXT,
-    added_by      TEXT DEFAULT 'agent',
-    approved_by   TEXT,
-    approved_at   DATETIME,
-    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-    times_matched INTEGER DEFAULT 0
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern        TEXT NOT NULL,
+    category_main  TEXT NOT NULL,
+    category_sub   TEXT,
+    category_sub2  TEXT,
+    details        TEXT,
+    account_match  TEXT,
+    type_match     TEXT,
+    amount_min     REAL,
+    amount_max     REAL,
+    added_by       TEXT DEFAULT 'agent',
+    approved_by    TEXT,
+    approved_at    DATETIME,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    times_matched  INTEGER DEFAULT 0
 );
 
 

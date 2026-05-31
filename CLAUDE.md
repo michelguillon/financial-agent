@@ -45,8 +45,8 @@ Constants in `agent/claude_helpers.py`. Rationale in [SPEC §3.3](docs/SPEC_AGEN
 ### State-store boundary rule
 `set_agent_state` is for durable facts the next session would benefit from (e.g. `mortgage_rate_change_date`). Not for conversational scratch, not for things re-derivable from a tool call. Rationale: [SPEC §3.1](docs/SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory).
 
-### Taxonomy is fixed
-The category taxonomy (SPEC §4) reflects the user's real-world historical spending. It has gaps — no `video` sub for streaming, no `rail` sub for trains, no `Travel` main. When the model classifies into an imperfect fit, the agent must say so honestly (this is in the system prompt). Don't invent new categories silently. Phase 2 will evolve the taxonomy via the agent itself.
+### Taxonomy is table-defined; agent extends only with approval
+Post-A2 the taxonomy lives in `classifier/rules_seed.py` (loaded into `classification_rules` by `db/seed_rules.py`). A2 added `Travel`/`Transport/rail`/`Leisure/subscription/video`. NETFLIX/AIRBNB/TRAINLINE/DISNEY+ are deliberately kept in `data/synthetic/generate_synthetic.py:NOISE_MEMOS` so the agent demo loop still has Missing transactions to classify into the new categories. When the agent encounters something with no good fit, it must say so honestly (in the system prompt). A future A3 will let the agent propose new taxonomy entries via a paired preview/apply tool; until then, taxonomy edits require a source change to `rules_seed.py`.
 
 ### Currency convention
 Transaction data: **£** (UK).

@@ -10,24 +10,18 @@ Pick one or more to work on next session. Most are independent; dependencies are
 
 ## A. Classification engine evolution
 
-### A1 — Migrate hardcoded chain into `classification_rules` table
-**What.** Phase 2 of SPEC §3.4 proper. The 60+ regex rules in `classifier/bank_statement_parser.py:categories()` get migrated into rows of the `classification_rules` SQLite table. The Python function becomes a thin wrapper around the table lookup; the hardcoded if/elif chain is retired.
-**Why.** All rules become inspectable, editable, exportable. The agent can show, evolve, and version-control the user's whole classification logic via tool calls. End state described in SPEC §3.4.
-**Where from.** [SPEC §3.4](SPEC_AGENT.md#34--classification-engine-migration-two-phase).
-**Scope.** Half-day. A migration script that walks `categories()` and emits ~60 INSERT rows; the wrapper in `classifier/rule_lookup.py` already supports table-first lookup, so retiring the chain is mostly deleting it. Round-trip verifier (Steps 1+3) still works — should report 100% agreement against the synthetic data, just routed via the table.
+### ~~A1 — Migrate hardcoded chain into `classification_rules` table~~ ✓ Done (2026-05-31)
+Shipped: ~40 rules ported to [classifier/rules_seed.py](../classifier/rules_seed.py); [db/seed_rules.py](../db/seed_rules.py) loads them via `migrate.py` after every ingest. Schema extended with `account_match`/`type_match`/`amount_min`/`amount_max` for the 3 conditional rules. Hardcoded `categories()` deleted from [classifier/bank_statement_parser.py](../classifier/bank_statement_parser.py). REGEXP backed by `re.match` (start-anchored) to preserve original semantics. [tests/test_round_trip.py](../tests/test_round_trip.py) verifies 100% agreement. See [LEARNINGS — A1 + A2](LEARNINGS.md#a1--a2--rules-into-table--taxonomy-expansion).
 
-### A2 — Taxonomy expansion (Travel main, rail sub, video sub)
-**What.** Extend SPEC §4 taxonomy: add `Travel` as a new main (covers AIRBNB, hotels, flights), `Transport/rail` sub (TRAINLINE), `Leisure/subscription/video` sub (NETFLIX, DISNEY+). Update the synthetic generator to use these where appropriate; update the classifier's rules.
-**Why.** Live LLM validation showed Haiku correctly pigeonholing into "least-wrong" categories because there's no good fit (NETFLIX → music, TRAINLINE → taxi, AIRBNB → entertainment). The agent handles it honestly but the data is still misclassified.
-**Where from.** [LEARNINGS — Step 4 surprises (taxonomy gaps)](LEARNINGS.md#step-4--tool-implementations--docker).
-**Scope.** 1–2 hours. Spec edit + 5–10 new regexes in the classifier + ~20 line update to the synthetic generator + re-run migration. Probably best done together with A3.
+### ~~A2 — Taxonomy expansion (Travel main, rail sub, video sub)~~ ✓ Done (2026-05-31)
+Shipped alongside A1: `Travel/accommodation/hotel`, `Transport/rail`, `Leisure/subscription/video` added to the taxonomy with baseline pre-classified rows (BOOKING.COM, AVANTI WEST COAST, NOW TV). NETFLIX/AIRBNB/TRAINLINE/DISNEY+ deliberately stay in `NOISE_MEMOS` as Missing so the agent demo loop has classification work in the new categories. Test coverage: `tests/test_classification.py:test_a2_new_subs_present_in_taxonomy`.
 
 ### A3 — `extend_taxonomy(main, sub, sub2)` tool
 **What.** New agent tool that adds a new taxonomy entry with human approval, then optionally re-runs a list of Missing rows through `suggest_classification` to surface ones that would now fit.
 **Why.** Makes the taxonomy evolvable through the agent itself rather than requiring source edits. Closes the loop the LEARNINGS Step 4 entry pointed at.
 **Where from.** Plan-mode discussion before Step 4 ("How to handle the taxonomy gaps" → "Add a tool" was the third option).
 **Scope.** Half-day. New tool + schema + preview/apply pair (per the project-wide preview-before-apply default). Needs to write to a `taxonomy_extensions` table (new) or hold the list elsewhere — SPEC update needed.
-**Depends on.** Naturally pairs with A1 (once rules are in the table, the taxonomy is just the distinct categories used by rules).
+**Depends on.** ~~A1~~ — unblocked, A1 shipped 2026-05-31. The natural follow-up: a tool that inserts rows into `classification_rules` with `added_by='agent'` (which `db/seed_rules.py` already leaves alone on re-seed) and writes an audit entry. See [LEARNINGS — A1+A2 → Hand-off to A3](LEARNINGS.md#a1--a2--rules-into-table--taxonomy-expansion).
 
 ---
 

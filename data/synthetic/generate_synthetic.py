@@ -359,6 +359,18 @@ CHARITY = ["BRITISH RED CROSS", "UNICEF UK"]
 # Bills/Bank Fees
 BANK_FEES = ["INTEREST CHARGE", "CHARGES OVERDRAFT", "BLUE REWARDS", "EXPERIAN UK"]
 
+# Travel/accommodation/hotel (A2 — new taxonomy entry, baseline merchants
+# so the category exists in the DB without auto-classifying AIRBNB).
+TRAVEL_HOTELS = ["BOOKING.COM", "HILTON LONDON", "MARRIOTT HOTELS"]
+
+# Transport/rail (A2 — new sub. TRAINLINE stays in NOISE_MEMOS as a Missing).
+RAIL_OPERATORS = ["AVANTI WEST COAST", "LNER TICKETS", "GWR TRAINS",
+                  "SOUTHEASTERN RAIL"]
+
+# Leisure/subscription/video (A2 — new sub2. NETFLIX & DISNEY+ stay
+# in NOISE_MEMOS as Missing.).
+VIDEO_SUBS = ["NOW TV SUBSCRIPTION", "BRITBOX UK", "APPLE TV+"]
+
 # Cleaners (redacted from EMELYN COMINTAN / CELY CASTILLO / CELY NAVARRO)
 CLEANERS_EVENTS = [
     (date(2011, 1, 1), "CLEANER_A"),
@@ -634,6 +646,64 @@ def gen_subscriptions(out: list[Txn]) -> None:
                 cat_main="Leisure", cat_sub="sport", cat_sub2="gym",
             )
         )
+
+
+def gen_video_subs(out: list[Txn]) -> None:
+    """Monthly video streaming, starting 2018-01 (era when the user picked
+    these up). One subscription per merchant, all running concurrently."""
+    for y, m in iter_months(date(2018, 1, 1), END_DATE):
+        for i, merchant in enumerate(VIDEO_SUBS):
+            d = safe_day(y, m, 5 + i * 7)
+            base = {"NOW TV SUBSCRIPTION": 9.99,
+                    "BRITBOX UK": 5.99,
+                    "APPLE TV+": 6.99}[merchant]
+            out.append(
+                Txn(
+                    date=d, account=ACCT_CURRENT,
+                    amount=-round(jitter(base * inflation(d), 0.01), 2),
+                    type="DD", memo=merchant,
+                    cat_main="Leisure", cat_sub="subscription",
+                    cat_sub2="video",
+                )
+            )
+
+
+def gen_travel_hotels(out: list[Txn]) -> None:
+    """~1 hotel booking per year, mostly between Apr–Sep. Charged to Amex."""
+    for y, m in iter_months(START_DATE, END_DATE):
+        if m not in (4, 6, 9):
+            continue
+        if random.random() > 0.35:
+            continue
+        d = safe_day(y, m, random.randint(5, 25))
+        merchant = pick(TRAVEL_HOTELS)
+        out.append(
+            Txn(
+                date=d, account=ACCT_AMEX,
+                amount=-round(jitter(280.00 * inflation(d), 0.30), 2),
+                type="PURCHASE", memo=f"{merchant} {random.randint(1000, 9999)}",
+                cat_main="Travel", cat_sub="accommodation",
+                cat_sub2="hotel",
+            )
+        )
+
+
+def gen_rail(out: list[Txn]) -> None:
+    """~6 train tickets per year. Charged to Current or Amex."""
+    for y, m in iter_months(START_DATE, END_DATE):
+        n_trips = random.choices([0, 1, 2], weights=[7, 4, 1])[0]
+        for _ in range(n_trips):
+            d = safe_day(y, m, random.randint(2, 27))
+            merchant = pick(RAIL_OPERATORS)
+            account = random.choice([ACCT_CURRENT, ACCT_AMEX])
+            out.append(
+                Txn(
+                    date=d, account=account,
+                    amount=-round(jitter(48.00 * inflation(d), 0.50), 2),
+                    type="PURCHASE", memo=f"{merchant} {random.randint(100, 9999)}",
+                    cat_main="Transport", cat_sub="rail",
+                )
+            )
 
 
 def gen_loan(out: list[Txn]) -> None:
@@ -1274,6 +1344,7 @@ def generate() -> list[Txn]:
     gen_utilities(out)
     gen_cleaner(out)
     gen_subscriptions(out)
+    gen_video_subs(out)
     gen_loan(out)
     gen_wren_loan(out)
     gen_charity(out)
@@ -1290,6 +1361,8 @@ def generate() -> list[Txn]:
     gen_tube(out)
     gen_taxi(out)
     gen_parking(out)
+    gen_rail(out)
+    gen_travel_hotels(out)
     gen_restaurants(out)
     gen_pubs(out)
     gen_cafes(out)
