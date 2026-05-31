@@ -457,6 +457,24 @@ this user's historical real spending, not a forward-looking superset.
 Phase 2 (when the hardcoded chain migrates into the rules table) is the
 natural time to evolve sub-categories with the agent's help.
 
+### Reusable patterns
+
+- **AskUserQuestion before plan, ExitPlanMode after.** Four design
+  questions in plan mode beats four questions per implementation phase.
+- **Co-locate schema with function**; assemble the registry from the
+  per-module exports. Single source of truth, drift-impossible.
+- **Two-step destructive operations** (preview → apply) where the
+  agent is in the loop — promoted to a [project-wide
+  default](#preview-before-apply-for-destructive-agent-tools).
+- **Tool-use with forced `tool_choice`** as a way to get guaranteed
+  structured output from a model call — more robust than JSON-mode
+  prompting because the schema is part of the request.
+- **Mount the directory, not the file**, for Docker bind mounts. Path
+  existence is no longer a fresh-checkout footgun.
+- **Lazy module-level connection**, with a `reset_*` helper for tests.
+  The cost of opening the SQLite DB on every call would add up across
+  a long agent session; the lazy global pays the open cost once.
+
 ---
 
 ## Step 5 — Agent loop
@@ -513,14 +531,17 @@ deterministically-tested tools**. The bug was in correct-looking
 Python that passed every unit-style test in Step 4. Only a live model
 actually using the tool surfaced the API mismatch.
 
-**4. Prompt caching works exactly as the SPEC promised.**
+**4. Prompt caching works exactly as the SPEC promised — and hits on turn 1.**
 
-Turn 1 input: 911 tokens, cache_read 0. Turn 2 input: 2,279 tokens,
-cache_read **9,378** — meaning ~9.4k tokens of system + state snapshot
-were served from cache at $0.30/MTok instead of $3.00/MTok. Net
-savings on a 3-turn conversation: ~$0.025. For longer sessions or
-heavier traffic this becomes the dominant cost lever. Worth the ~5
-lines of `cacheable_text_block(...)` wrapping in `build_system_prompt`.
+The first test session showed turn 1 cache_read: 0, which suggested
+caching only kicked in from turn 2 onwards. The real production session
+(2026-05-31, see worked example below) showed something better:
+`cache_read: 3,015` on turn 1 itself. The system prompt and tool schemas
+are cached on the very first API call of a session — by turn 2 those
+same 3,015 tokens are served at $0.30/MTok instead of $3.00/MTok. On a
+3-turn mortgage scenario conversation the cache saved roughly $0.025.
+The cost of the abstraction: ~5 lines of `cacheable_text_block(...)`
+wrapping in `build_system_prompt`. Worth it at any session length.
 
 ### Surprises
 
@@ -569,20 +590,149 @@ iteration into a single user message before the next API call.
   query that returns 100 categories shouldn't blow next-turn context.
   Trimming for the model's view; full result still in the transcript.
 
-### Reusable patterns
 
-- **AskUserQuestion before plan, ExitPlanMode after.** Four design
-  questions in plan mode beats four questions per implementation phase.
-- **Co-locate schema with function**; assemble the registry from the
-  per-module exports. Single source of truth, drift-impossible.
-- **Two-step destructive operations** (preview → apply) where the
-  agent is in the loop — promoted to a [project-wide
-  default](#preview-before-apply-for-destructive-agent-tools).
-- **Tool-use with forced `tool_choice`** as a way to get guaranteed
-  structured output from a model call — more robust than JSON-mode
-  prompting because the schema is part of the request.
-- **Mount the directory, not the file**, for Docker bind mounts. Path
-  existence is no longer a fresh-checkout footgun.
-- **Lazy module-level connection**, with a `reset_*` helper for tests.
-  The cost of opening the SQLite DB on every call would add up across
-  a long agent session; the lazy global pays the open cost once.
+
+---
+
+## Cross-cutting decisions (continued)
+
+### What the transcript log records — and what it doesn't
+
+**The observation:** reading a transcript entry like this one —
+
+```json
+{"type": "assistant", "content": [
+  {"type": "tool_use", "name": "get_spending_summary", "input": {"months": 60, "category_main": "Transport"}},
+  {"type": "tool_use", "name": "get_spending_summary", "input": {"months": 60, "category_main": "House"}}
+]}
+```
+
+— it looks like Claude spontaneously knew what tools existed and chose to
+call two of them. There's no visible context explaining how. This is a
+log format issue, not a mystery.
+
+**What actually gets sent on every API call:**
+
+```
+client.messages.create(
+    system = [system_prompt, agent_state_snapshot],   ← NOT in the log
+    tools  = [schema_1, schema_2, ..., schema_11],    ← NOT in the log
+    messages = [...conversation turns...]              ← THIS is the log
+)
+```
+
+The transcript records only the `messages` array — the evolving
+conversation. The `system` parameter (system prompt + agent state
+snapshot) and the `tools` parameter (full JSON schema of all 11
+tools) are sent on every single API call but are never written to the
+log because they don't change turn-to-turn. Logging them per turn
+would make the transcript enormous and unreadable with no debugging
+benefit.
+
+**The `cache_read` tokens are the evidence they were sent:**
+In the `usage` line for turn 1 of the mortgage session:
+
+```json
+{"type": "usage", "tokens": {"in": 358, "cache_read": 3015, "cache_creation": 423}}
+```
+
+`cache_read: 3015` means 3,015 tokens were served from cache. Those
+tokens *are* the system prompt and tool registry — they were sent, read
+by the model, and happened to hit the cache. The log doesn't record
+their content; it records the cost proof that they arrived.
+
+**Implication for debugging:** if the agent calls a tool unexpectedly,
+or fails to call one it should, the root cause will never be visible in
+the transcript alone. Look at: (1) the tool schema description — how the
+model was told the tool works; (2) the system prompt — whether the
+relevant constraint was stated; (3) the agent_state snapshot — whether
+missing context changed the reasoning. The transcript shows the
+*what*; the static config explains the *why*.
+
+**Interview framing:**
+"The transcript is a record of the conversation, not a record of the
+API call. Every call also sends the system prompt and the full tool
+registry — the model only knows about tools because we include their
+JSON schemas on every request. If you read a transcript and wonder how
+Claude knew what tools existed, look for the `cache_read` token count
+in the usage line — those cached tokens are the tool schemas doing
+their job invisibly."
+
+---
+
+### The agent loop in production — reading a real session
+
+**Reference:** `AGENT_ARCHITECTURE_DIAGRAMS.html` — four diagrams
+showing the loop, classification HITL flow, scenario use case, and
+data architecture. Open in any browser; supports dark mode.
+
+The mortgage rate session (2026-05-31, logged in
+`logs/session_20260531T124548Z.jsonl`) is a clean worked example of
+all three architecture decisions working together in one conversation.
+
+**Turn 1 — Multi-tool batching and honest limitation surfacing**
+
+User asked about car spend over 5 years. The model responded with
+*two* `tool_use` blocks and zero text — it batched `Transport` and
+`House` queries in the same response because the question "was
+maintenance the most expensive?" implied both categories might be
+relevant. The 5-second gap between user message and tool_use response
+is Sonnet reasoning time. The under-1-second gap between tool_use
+and tool_results is Python running SQLite queries.
+
+The final response then did something architecturally important: it
+correctly identified that `get_spending_summary` returns totals across
+the window, not year-by-year breakdowns, and told the user this
+directly rather than fabricating a trend. This was the "surface
+uncertainty" prompt instruction having real effect.
+
+```
+turn 1 cost: $0.0117  (cache_read: 3,015 — system prompt + tools cached)
+```
+
+**Turn 2 — Three simultaneous tool calls, null state, then a write**
+
+The mortgage rate question triggered three tool calls in one response:
+`get_income_summary`, `classify_fixed_vs_discretionary`, and
+`get_agent_state("mortgage_balance")`. The state call returned `null`
+— the balance had never been stored. The model inferred ~£852k from
+the current £1,420/month payment at 2% and ran the scenario anyway.
+
+After the scenario completed, the model called `set_agent_state` three
+times — storing the rate change date, current rate, and new rate. It
+learned from the conversation and persisted what it learned without
+being told to. This is the cross-session knowledge store operating
+correctly: the agent identified durable facts and stored them with
+rationale.
+
+```
+turn 2 cost: $0.0168  (cache_read: 4,446 — growing context, still cached)
+```
+
+**Turn 3 — Correction accepted, re-run, cross-session write**
+
+User corrected the balance to £400k. The model immediately re-ran
+`model_scenario` with the corrected figure and then called
+`set_agent_state("mortgage_balance", 400000)` — writing the correct
+value for future sessions. The gap was now £667/month instead of
+£1,420/month, and the response correctly identified that a 15% trim
+on groceries and eating out would close it entirely.
+
+```
+turn 3 cost: $0.0268  (cache_creation: 4,224 — session history now staging for cache)
+```
+
+**The cost trend is architectural, not accidental:**
+$0.0117 → $0.0168 → $0.0268. The messages array grows each turn. Even
+with caching, the non-cached portion (new tool results, new messages)
+compounds. A session that runs to 15–20 turns will see this trend
+continue. The prompt caching holds the system prompt cost flat; the
+conversation history cost grows linearly. For very long sessions,
+periodic summarisation of older turns into agent_state entries (rather
+than keeping every turn in the messages array forever) is the natural
+next optimisation.
+
+**Total session cost: $0.055** — about 4p for a three-turn mortgage
+scenario conversation with five tool calls, two model hops (Sonnet for
+the loop, implicit), and three state writes. That's the cost of running
+this as a real personal finance tool.
