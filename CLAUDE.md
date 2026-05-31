@@ -58,29 +58,28 @@ The redacted classifier and the synthetic data generator share the same placehol
 
 ---
 
-## Verify-by-running (no pytest yet)
+## Verify-by-running (pytest)
 
-Each module's `if __name__ == "__main__":` block is its smoke test. The pytest cutover trigger is "regression surface gets too big to eyeball"; we're not there yet. See [LEARNINGS → Testing strategy](docs/LEARNINGS.md#testing-strategy-so-far-verify-by-running).
+The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). Deterministic tests run in <10s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS.md#b2--pytest-adoption).
 
 ```powershell
 # Deterministic — no API key needed
+docker compose run --rm agent pytest                          # full suite, llm skipped
+docker compose run --rm agent pytest -k state                 # one module
+docker compose run --rm agent pytest tests/test_classification.py -v
+
+# Generators and migrators are still ad-hoc entry points (not pytest):
 docker compose run --rm agent python data/synthetic/generate_synthetic.py
 docker compose run --rm agent python db/migrate.py --replace
-docker compose run --rm agent python -m agent.tools.state
-docker compose run --rm agent python -m agent.tools.classification
-docker compose run --rm agent python -m agent.tools.scenarios
-docker compose run --rm agent python -m agent.tool_registry
-docker compose run --rm agent python -m agent.transcript
-docker compose run --rm agent python -m agent.agent           # mocks the API
-docker compose run --rm agent python -m agent.cli             # eyeball rendering
+
+# Manual eyeball check on the CLI rendering layer:
+docker compose run --rm agent python -m agent.cli
 ```
 
-LLM-touching tests are gated by `RUN_LLM_TESTS=1` to avoid burning credits. Set it in `.env` alongside `ANTHROPIC_API_KEY` to enable:
+LLM-touching tests are gated by `RUN_LLM_TESTS=1`. Set it in `.env` alongside `ANTHROPIC_API_KEY` to include them:
 
 ```powershell
-# Now suggest_classification and the agent.agent end-to-end test will actually call the API.
-docker compose run --rm agent python -m agent.tools.classification
-docker compose run --rm agent python -m agent.agent
+docker compose run --rm -e RUN_LLM_TESTS=1 agent pytest       # full incl. ~$0.10 LLM
 ```
 
 A full 3-turn end-to-end conversation costs ~$0.08 at current Sonnet 4.6 rates.

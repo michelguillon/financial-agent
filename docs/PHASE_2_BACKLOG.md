@@ -39,11 +39,12 @@ Pick one or more to work on next session. Most are independent; dependencies are
 **Where from.** [SPEC §6](SPEC_AGENT.md#6-agent-loop) ("A code gate ... is a Phase 2 hardening option") and explicitly noted in the [Preview-before-apply cross-cutting decision](LEARNINGS.md#preview-before-apply-for-destructive-agent-tools).
 **Scope.** 2–3 hours. The tricky part is defining "approval pattern" generously enough to avoid false negatives. Probably need a small LLM call ("did this user message express approval?") rather than a regex.
 
-### B2 — Adopt pytest
-**What.** Convert the inline `if __name__ == "__main__":` smoke tests into pytest test files. Add a `tests/` directory, a `pytest.ini`, and CI (GitHub Actions). Real assertions, fixtures for the synthetic DB, gated LLM tests via a pytest marker (`@pytest.mark.llm`).
-**Why.** The LEARNINGS testing-strategy decision pinned the trigger to "Step 5 — when the regression surface gets too big to eyeball". We shipped Step 5 with verify-by-running and it worked, but adding any of A/B/C below increases that surface meaningfully.
-**Where from.** [LEARNINGS — Cross-cutting decisions → Testing strategy](LEARNINGS.md#testing-strategy-so-far-verify-by-running).
-**Scope.** Day. Mostly mechanical conversion. The interesting design questions are: how to share the synthetic DB across tests (fixture vs in-memory), and whether to add an end-to-end "scripted conversation" pytest fixture for catching prompt regressions.
+### ~~B2 — Adopt pytest~~ ✓ Done (2026-05-31)
+Shipped: 47 deterministic tests in ~8s + 2 `@pytest.mark.llm` tests gated by `RUN_LLM_TESTS=1`. Hybrid DB fixture (session-scoped seed + per-test `shutil.copy`), monkeypatched `db.database.DB_PATH`, `__main__` smoke blocks deleted from 6 modules. See [LEARNINGS — B2 — pytest adoption](LEARNINGS.md#b2--pytest-adoption).
+
+**Residual:** CI (GitHub Actions) was deferred. ~1h follow-up to add `.github/workflows/test.yml` that runs `docker compose run --rm agent pytest -m "not llm"` on push. ANTHROPIC_API_KEY not needed for the gated path.
+
+**Residual:** scripted-conversation pytest fixture for prompt-regression catching against mock responses (no LLM cost). Phase 3 territory.
 
 ### B3 — Slim down `classifier/bank_statement_parser.py`
 **What.** Split the preserved `Budget` class (Excel import, raw-CSV combining, the Phase-4 incremental Excel methods) out into its own module — `classifier/budget_importer.py` maybe. The agent's classification path then only needs `pandas` and `re`, not `openpyxl` and `python-dotenv`.

@@ -79,33 +79,3 @@ def dispatch(tool_name: str, tool_input: dict) -> object:
             f"Registered: {sorted(TOOL_FUNCTIONS)}"
         )
     return TOOL_FUNCTIONS[tool_name](**tool_input)
-
-
-# ---------------------------------------------------------------------------
-# Smoke test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    print(f"Registered {len(ANTHROPIC_TOOLS)} tools:")
-    for s in ANTHROPIC_TOOLS:
-        n_args = len(s["input_schema"].get("properties", {}))
-        required = len(s["input_schema"].get("required", []))
-        print(f"  {s['name']:<35} args={n_args} required={required}")
-
-    # Verify every schema name maps to a real callable.
-    for s in ANTHROPIC_TOOLS:
-        assert s["name"] in TOOL_FUNCTIONS, f"missing dispatch entry: {s['name']}"
-        assert callable(TOOL_FUNCTIONS[s["name"]])
-
-    # Verify dispatch works for a read-only tool that doesn't need the API.
-    result = dispatch("get_unclassified_transactions", {"limit": 3})
-    assert isinstance(result, list)
-    print(f"\ndispatch('get_unclassified_transactions', limit=3) -> {len(result)} rows")
-
-    # Unknown tool raises clearly.
-    try:
-        dispatch("nope_not_a_tool", {})
-    except KeyError as e:
-        print(f"dispatch('nope_not_a_tool') -> KeyError (expected): {e}")
-
-    print("\nAll tool_registry.py smoke tests passed.")

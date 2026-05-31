@@ -10,18 +10,23 @@ project hits a similar problem, what here would help?
 
 ## Cross-cutting decisions
 
-### Testing strategy (so far): verify-by-running
+### Testing strategy: verify-by-running through Phase 1, pytest from B2 onward
 
-No pytest, no fixtures, no CI. Each step's validator is baked into the
-tool itself — the synthetic generator's summary, the throwaway round-trip
-verifier in Step 1, `migrate.py`'s validation epilogue. At this scale,
-"run the script, eyeball the output" has been faster than writing test
+**Phase 1 (Steps 1–5):** no pytest, no fixtures, no CI. Each step's validator
+baked into the tool itself — the synthetic generator's summary, the
+throwaway round-trip verifier in Step 1, `migrate.py`'s validation
+epilogue, per-module `if __name__ == "__main__":` smoke blocks. At that
+scale, "run the script, eyeball the output" was faster than writing test
 infrastructure.
 
-The trigger for adopting pytest is Step 5 — the agent loop is where the
-regression surface (tools × scenarios × state transitions) gets large
-enough for unit tests to pay back. Stating this out loud so it reads as a
-policy, not an oversight.
+**Trigger that flipped it:** the start of Phase 2. A1/A2 (rules-into-table
+migration + taxonomy expansion) re-shapes the classifier path and the
+synthetic generator together, so the round-trip verifier and the
+preview/apply contract need a real regression net. The original Step 5
+trigger turned out to be too early — the agent loop alone was eyeballable;
+what wasn't was *editing the classifier mid-flight without breaking the
+flow*. See [B2 — pytest adoption](#b2--pytest-adoption) below for the
+mechanics.
 
 ### Preview-before-apply for destructive agent tools
 
@@ -736,3 +741,142 @@ next optimisation.
 scenario conversation with five tool calls, two model hops (Sonnet for
 the loop, implicit), and three state writes. That's the cost of running
 this as a real personal finance tool.
+
+---
+
+## B2 — pytest adoption
+
+### Goal
+
+Convert the inline `__main__` smoke blocks in 6 modules into a real pytest
+suite *before* A1/A2 begin to mutate the classifier path. Preserve the
+deterministic-vs-LLM split (the `RUN_LLM_TESTS=1` env-var convention) and
+the docker-first invocation discipline. CI was deferred — landing tests
+first, treating CI as its own follow-up.
+
+### Methodology that worked
+
+**1. Canary one test before porting the rest.**
+
+`test_state.py` went first, alone, because it exercises the full fixture
+chain — `seed_db` builds a synthetic DB once per session, `tmp_db` copies
+it per-function and monkey-patches `db.database.DB_PATH`. If the
+monkeypatch didn't reach the tools that import `open_db` directly, every
+later test would have failed for the same reason. Running one file in
+isolation proved the chain before scaling. The cost of being wrong was a
+single test file, not nine.
+
+**2. Two-tier fixture: session-scoped seed + per-function copy.**
+
+The synthetic CSV is 18,780 rows; `migrate.ingest()` takes ~2s. Building
+it per-test was wasteful (paying ~2s × N), building it once per session
+was risky (writes leak between tests). The shape that worked:
+
+```python
+@pytest.fixture(scope="session")
+def seed_db(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("seed") / "seed.db"
+    with database.open_db(path) as conn:
+        ingest(SYNTHETIC_CSV, conn, source_default="synthetic", replace=False)
+    return path
+
+@pytest.fixture
+def tmp_db(seed_db, tmp_path, monkeypatch) -> Path:
+    db_copy = tmp_path / "finance.db"
+    shutil.copy(seed_db, db_copy)
+    monkeypatch.setattr("db.database.DB_PATH", db_copy)
+    return db_copy
+```
+
+`shutil.copy` of an 18k-row SQLite file is ~30ms. The whole suite (47
+tests, no LLM) runs in ~8s. The plan's `<10s` sanity gate held.
+
+**3. Monkeypatch over the `_this = sys.modules[__name__]` dance.**
+
+`agent/agent.py`'s old `__main__` block patched the running module by
+walking `sys.modules` (because `__main__` blocks have no fixture system).
+The pytest version replaces that with one line per binding:
+
+```python
+monkeypatch.setattr("agent.agent.call_with_retry", lambda func, *a, **kw: fake_create(**kw))
+monkeypatch.setattr("agent.agent.get_client", lambda: _FakeClient())
+```
+
+Same surgery, but with automatic teardown restore. The `_this` indirection
+was scar tissue from not having pytest available.
+
+**4. LLM-gated tests as a marker + auto-skip hook.**
+
+The previous convention used `os.environ.get("RUN_LLM_TESTS") == "1"` as
+an inline gate. Pytest's idiom is a marker. Preserved the same env-var so
+nothing in CLAUDE.md or docker-compose.yml had to change:
+
+```python
+# pytest.ini
+markers =
+    llm: hits the Anthropic API; skipped unless RUN_LLM_TESTS=1
+
+# tests/conftest.py
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get("RUN_LLM_TESTS") == "1":
+        return
+    skip = pytest.mark.skip(reason="LLM test; set RUN_LLM_TESTS=1 to run")
+    for item in items:
+        if "llm" in item.keywords:
+            item.add_marker(skip)
+```
+
+One env-var entrypoint, no `--run-llm` CLI flag — fewer ways to forget.
+
+**5. Crash-only smoke for the CLI renderer.**
+
+`agent/cli.py` had no assertions in its old `__main__` (eyeball-only).
+Snapshot tests against `rich.console.Console` are brittle across terminal
+widths and colour modes. The middle ground: instantiate `RichRenderer`,
+call each public method with mock blocks, assert no exception. Catches
+broken constructors and missing methods; ignores prettiness. `python -m
+agent.cli` stays as the manual visual check.
+
+### Surprises
+
+**Docker layer cache bit me twice.** The image `COPY . .` step caches by
+file content at build time. My first build kicked off *before* I'd written
+`tests/`, so the image had no test files and pytest reported "file or
+directory not found". Easy fix (rebuild) but a reminder: don't kick off a
+long Docker build in parallel with adding files the image needs to see.
+
+**An orphan `print()` survived a multi-line `Edit` because the original
+`__main__` block was one line longer than I'd matched in `old_string`.**
+The Edit tool's exact-string requirement saved me from corrupting more
+files, but the failure mode (one-line orphan, `IndentationError` deferred
+to import time) was diagnosable only from the next test run. Lesson: when
+deleting a big trailing block, prefer `Read` the last 10 lines first to
+confirm the exact tail.
+
+### What was deferred (intentionally)
+
+- **CI (GitHub Actions).** Backlog flagged this as part of B2. Pulled out
+  to a separate follow-up because (a) there's no `.github/` dir yet, (b)
+  the secrets story for `ANTHROPIC_API_KEY` in CI is a separate decision,
+  (c) landing tests locally first lets CI be one focused PR.
+- **Scripted-conversation pytest fixture.** Today the LLM end-to-end test
+  is a single linear script. A reusable fixture that records and replays
+  multi-turn conversations against mock responses (for prompt-regression
+  catching without LLM cost) is Phase 3 territory.
+
+### Hand-off to A1
+
+The next chosen item adds `classification_rules` table reads as the
+primary lookup path with the hardcoded chain as fallback. The pytest
+shape it needs:
+
+- `test_rule_lookup.py` — exists today only in the migration target. New
+  cases: table-first hit, table-miss-with-chain-fallback, table-and-chain
+  agreement on the synthetic dataset (the round-trip verifier).
+- Existing `test_classification.py` should keep passing untouched: the
+  preview/apply contract is independent of where rules live.
+
+### Cost
+
+Final pytest suite: **47 deterministic tests in ~8s**, 2 LLM tests
+(`@pytest.mark.llm`) opt-in via `RUN_LLM_TESTS=1` for ~$0.10/run.
