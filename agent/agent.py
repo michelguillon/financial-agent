@@ -27,7 +27,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from claude_helpers import (  # noqa: E402
+from agent.claude_helpers import (  # noqa: E402
     AGENT_MODEL,
     cacheable_text_block,
     call_with_retry,

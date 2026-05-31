@@ -299,7 +299,7 @@ def suggest_classification(
     """
     # Imports deferred so this module is importable even without `anthropic`
     # installed (only this function needs it).
-    from claude_helpers import CLASSIFIER_MODEL, call_with_retry, get_client
+    from agent.claude_helpers import CLASSIFIER_MODEL, call_with_retry, get_client
 
     taxonomy = list_categories(source=source)
     system = _SYSTEM_PROMPT.format(taxonomy=json.dumps(taxonomy, indent=2))

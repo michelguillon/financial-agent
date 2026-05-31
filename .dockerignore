@@ -45,8 +45,10 @@ Thumbs.db
 # Claude Code
 .claude/
 
-# Docs / plans
+# Docs / plans — exclude all .md by default, re-include the ones worth
+# having inside the image for in-container reference.
 *.md
 !README.md
-!SPEC_AGENT.md
-!LEARNINGS.md
+!CLAUDE.md
+!docs/SPEC_AGENT.md
+!docs/LEARNINGS.md

@@ -10,45 +10,46 @@ after the interview — the classifier gets smarter with each approved rule,
 and the same agent loop powers both the maintenance task and the planning
 conversations.
 
-> **Status:** under construction. Step 1 (synthetic data generator) is
-> complete; Steps 2–5 are tracked in [SPEC_AGENT.md §8](SPEC_AGENT.md#8-build-sequence).
+> **Status:** Steps 1–5 complete (synthetic data, SQLite, classifier
+> wrapper, tools + Docker, agent loop). Step 6 (web UI) is optional —
+> see [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence).
 
 ---
 
 ## What's interesting about the architecture
 
-The full spec is in [SPEC_AGENT.md](SPEC_AGENT.md). The highlights:
+The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 
 - **One agent, two tool groups.** Classification tools (suggest regex rules,
   process the `Missing` backlog with human approval) and scenario tools
   (spending summaries, fixed/discretionary split, scenario modelling) share
   one agent loop, one SQLite store, one conversation. The shared substrate
   is the point: better classifications → better scenario answers.
-  ([§2](SPEC_AGENT.md#2-what-this-system-does))
+  ([SPEC §2](docs/SPEC_AGENT.md#2-what-this-system-does))
 
 - **Two memory layers, separate implementations.** A messages array for
   in-session continuity (finance conversations are short — full replay
   costs almost nothing) and a SQLite `agent_state` table for durable facts
   the agent has learned about the user's finances across sessions.
-  ([§3.1](SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory))
+  ([SPEC §3.1](docs/SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory))
 
 - **Raw Anthropic API tool use — no framework.** No LangChain, no
   LangGraph. The agent loop is ~30 lines of explicit Python: build context,
   call API, dispatch tool calls, inject results, repeat. Every termination
   condition and every error path is visible in the code.
-  ([§3.2](SPEC_AGENT.md#32--orchestration-raw-api-tool-use-no-framework))
+  ([SPEC §3.2](docs/SPEC_AGENT.md#32--orchestration-raw-api-tool-use-no-framework))
 
 - **Two-phase classifier migration.** Phase 1 (this build): a SQLite rules
   table is checked first; if no rule matches, fall through to the existing
   hardcoded `if/elif` chain that already classifies real exports. Phase 2
   (future): the hardcoded chain gets migrated into the rules table itself.
   Phase 1 ships value without a rewrite.
-  ([§3.4](SPEC_AGENT.md#34--classification-engine-migration-two-phase))
+  ([SPEC §3.4](docs/SPEC_AGENT.md#34--classification-engine-migration-two-phase))
 
 - **Demo-mode without auth.** A data-layer switch: if `data/real/` exists,
   use it; otherwise fall back to the synthetic dataset committed to the
   repo. Recruiters get a working demo immediately; real data stays on the
-  home server. ([§3.6](SPEC_AGENT.md#36--demo-mode))
+  home server. ([SPEC §3.6](docs/SPEC_AGENT.md#36--demo-mode))
 
 ---
 
@@ -64,7 +65,7 @@ The full spec is in [SPEC_AGENT.md](SPEC_AGENT.md). The highlights:
 | 6 | UI (optional — CLI demo first) | ⏳ |
 
 Methodology notes and surprises from each step are logged in
-[LEARNINGS.md](LEARNINGS.md). The aim is that the *how* of each step is
+[docs/LEARNINGS.md](docs/LEARNINGS.md). The aim is that the *how* of each step is
 reusable, not just the *what*.
 
 ---
@@ -128,7 +129,7 @@ The synthetic dataset is 18,780 transactions spanning 2011-01-01 →
 2025-12-31 across 5 accounts (current, savings, three credit cards).
 Deterministic, stdlib only.
 
-Categories follow the taxonomy in [SPEC_AGENT.md §4](SPEC_AGENT.md#4-database-schema).
+Categories follow the taxonomy in [SPEC §4](docs/SPEC_AGENT.md#4-database-schema).
 About 5% of the variable spend is intentionally tagged `Missing` (recognisable
 real merchants the classifier doesn't yet know) — that's the agent's
 classification backlog on first run.
@@ -142,7 +143,7 @@ repo, never on a remote.
 
 The classifier code (`bank_statement_parser.py`, copied from a private repo
 later in the build) is redacted before commit per
-[SPEC_AGENT.md §9](SPEC_AGENT.md#9-privacy-and-access-pattern): account
+[SPEC §9](docs/SPEC_AGENT.md#9-privacy-and-access-pattern): account
 numbers, employer names, cleaner names, cardholder details, and loan
 references all become generic placeholders. The synthetic generator uses
 the same placeholders, so synthetic and real data flow through identical
@@ -157,29 +158,32 @@ and `logs/` can never be staged accidentally.
 
 ```
 financial-agent/
-├── SPEC_AGENT.md            architecture spec
-├── LEARNINGS.md             methodology log, one entry per build step
-├── README.md                this file
-├── Dockerfile               python:3.13-slim, non-root agentuser
-├── docker-compose.yml       dev convenience: volume-mounts data/ and logs/
-├── requirements.txt         anthropic, python-dotenv, pandas
-├── claude_helpers.py        Anthropic client + retry wrapper + model constants
+├── README.md                       GitHub landing page
+├── CLAUDE.md                       project conventions for Claude Code
+├── Dockerfile                      python:3.13-slim, non-root agentuser
+├── docker-compose.yml              dev convenience: volume-mounts data/ and logs/
+├── requirements.txt                anthropic, python-dotenv, pandas, rich
+├── .env.example
+├── docs/
+│   ├── SPEC_AGENT.md               architecture spec
+│   └── LEARNINGS.md                methodology log, one entry per build step
 ├── agent/
-│   ├── agent.py             conversational loop, Renderer protocol, prompt caching
-│   ├── cli.py               RichRenderer (display layer)
-│   ├── transcript.py        JSONL session logger
-│   ├── __main__.py          REPL entry: `python -m agent`
-│   ├── tools/               state, classification, scenarios
-│   └── tool_registry.py     schemas + dispatch (11 tools)
+│   ├── agent.py                    conversational loop, Renderer protocol, prompt caching
+│   ├── cli.py                      RichRenderer (display layer)
+│   ├── transcript.py               JSONL session logger
+│   ├── __main__.py                 REPL entry: `python -m agent`
+│   ├── claude_helpers.py           Anthropic client + retry + model constants
+│   ├── tool_registry.py            schemas + dispatch (11 tools)
+│   └── tools/                      state, classification, scenarios
 ├── classifier/
-│   ├── bank_statement_parser.py  redacted copy of the private classifier
-│   └── rule_lookup.py            SQLite-first wrapper
+│   ├── bank_statement_parser.py    redacted copy of the private classifier
+│   └── rule_lookup.py              SQLite-first wrapper
 ├── db/
-│   ├── schema.sql           CREATE TABLEs from SPEC §4
-│   ├── database.py          connection helpers, DATA_DIR, get_data_source
-│   └── migrate.py           CSV → SQLite ingest
+│   ├── schema.sql                  CREATE TABLEs from SPEC §4
+│   ├── database.py                 connection helpers, DATA_DIR, get_data_source
+│   └── migrate.py                  CSV → SQLite ingest
 └── data/
-    ├── finance.db           gitignored, SQLite store
-    ├── synthetic/           committed — generator + 15y of fake transactions
-    └── real/                gitignored — never enters the repo
+    ├── finance.db                  gitignored, SQLite store
+    ├── synthetic/                  committed — generator + 15y of fake transactions
+    └── real/                       gitignored — never enters the repo
 ```
