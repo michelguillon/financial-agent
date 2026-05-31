@@ -94,17 +94,19 @@ Shipped: FastAPI + React + Vite + Tailwind, single multi-stage Docker image. Per
 
 ---
 
-## Suggested ordering
+## Suggested ordering (updated post-C4)
 
-**If picking one thing:** A1 (Phase 2 §3.4 proper). It's the canonical Phase 2 item, ships clean value (inspectable rule table), and unblocks A3.
+A1, A2, A3, B2, and C4 are done. Of what's left:
 
-**If picking a small bundle:** A1 + A2 together — the taxonomy gaps are easier to fix once rules live in the table, and the synthetic generator + classifier updates are one consistent edit.
+**If picking the demo-hardening angle (most relevant now that the agent is publicly exposed):** B1 (code gate for `apply_*` tools) + D2 (transcript replay) + a tiny `/admin/stats` endpoint. ~half-day total. B1 makes prompt-injection materially harder; D2 lets recruiters watch a canned conversation without burning their $0.50 budget; stats give you a private monitoring view.
 
-**If picking the safety angle:** B1 + B2 — hardens the agent against future drift and gives you a regression net for everything else.
+**If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly".
 
-**If picking the long-term-utility angle:** C1 (real-data pipeline) — turns this from a demo into a tool you'd actually use weekly.
+**If picking the cost-efficiency angle:** C2 (Batch API for bulk Missing) — 50% Anthropic discount on bulk classification runs. Useful once a real-data ingestion produces a fat Missing backlog (so naturally pairs with B3+C1).
 
-**If picking the portfolio angle:** C4 (web UI). Slow to build but the demo video lands harder.
+**If picking polish:** D1 (currency display) + the B2 CI residual. Each ~1 hour.
+
+**If picking nothing big:** C3 (history summarisation) is *not* recommended next — the $0.50 web cap already bounds context growth, so the value is minimal until you raise the cap or add D3 (resume conversation).
 
 ---
 

@@ -1196,6 +1196,18 @@ v4's Vite plugin auto-detects content paths from imports. No
 eliminated relative to v3. Worth noting because the v3 tutorials still
 dominate search results; the v4 way is materially simpler.
 
+**react-markdown ships CommonMark only — tables need `remark-gfm`.**
+Caught after first real conversation: the agent often returns markdown
+tables (income breakdown, scenario comparison) and they rendered as
+ASCII slop. Two fixes, both small: add `remark-gfm` and pass it via
+`remarkPlugins={[remarkGfm]}`; install `@tailwindcss/typography` and
+load it with `@plugin "@tailwindcss/typography"` in the CSS. The
+`prose` classes had silently been doing nothing before this — they
+needed the plugin to take effect. Worth knowing because (a) the React
+markdown ecosystem assumes you know to add remark-gfm and (b)
+Tailwind v4's `@plugin` directive is new and not yet ubiquitous in
+tutorials.
+
 ### What got cut to ship
 
 - **Auth, sessions across browser restarts, multi-region.** Out of
