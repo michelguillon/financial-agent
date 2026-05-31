@@ -1,0 +1,42 @@
+# Multi-stage build: node compiles the React bundle, python runs FastAPI.
+
+# ---------- Stage 1: build the frontend ----------
+FROM node:22-slim AS frontend
+WORKDIR /build
+
+# Install deps first so npm cache survives source-only changes.
+COPY web/frontend/package.json web/frontend/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+
+COPY web/frontend/ ./
+RUN npm run build
+
+# ---------- Stage 2: python runtime ----------
+FROM python:3.13-slim
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+COPY requirements.txt requirements-web.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-web.txt
+
+# Agent code
+COPY agent/ ./agent/
+COPY classifier/ ./classifier/
+COPY db/ ./db/
+COPY data/synthetic/ ./data/synthetic/
+COPY web/backend/ ./web/backend/
+COPY tests/ ./tests/
+COPY pytest.ini ./
+
+# Built frontend bundle from stage 1, mounted at the path web/backend/app.py expects.
+COPY --from=frontend /build/dist ./web/frontend/dist
+
+RUN useradd -m -u 1000 agentuser && chown -R agentuser:agentuser /app
+USER agentuser
+
+EXPOSE 8000
+CMD ["python", "-m", "web.backend.main"]

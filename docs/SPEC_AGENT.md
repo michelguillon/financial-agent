@@ -631,8 +631,15 @@ Build all tool functions. Test each independently with direct function calls bef
 **Step 5 — Agent loop**
 Build `agent.py`. Wire tools to the loop. Test with synthetic data first, then real data.
 
-**Step 6 — UI (optional for Week 2)**
-CLI is sufficient for the portfolio demo. React + FastAPI upgrade follows the RFI project pattern and can be added post-Week 2.
+**Step 6 — Web UI ✓ Done (C4, 2026-05-31)**
+
+Shipped: React + Vite + Tailwind frontend served by a FastAPI backend; single Docker image (multi-stage Node→Python). SSE for streaming agent events (one event per Renderer callback). Three new concerns the CLI never had drove most of the work:
+
+- **Per-session isolation** — each visitor gets a `shutil.copy` of the seed SQLite DB under `/tmp/agent-sessions/<id>/`. Threaded through the agent tools via the `SESSION_DB_PATH` ContextVar in [db/database.py](../db/database.py); propagates across `asyncio.to_thread` automatically (Python 3.10+).
+- **Cost defense** — per-session $0.50 hard cap (enforced before each turn via [web/backend/limits.py](../web/backend/limits.py)); per-IP 3-sessions/24h rate limit. Anthropic API key stays server-side.
+- **Streaming** — `WebSseRenderer` ([web/backend/streaming.py](../web/backend/streaming.py)) implements the existing Renderer protocol but pushes events into an `asyncio.Queue` via `loop.call_soon_threadsafe`, since `run_turn` is synchronous and runs in a worker thread.
+
+Deployment shape: single image, served behind a tunnel (Cloudflare Tunnel or equivalent) that terminates HTTPS and sets `X-Forwarded-For`. See [LEARNINGS — C4](LEARNINGS.md#c4--web-ui) for the threading details and what got cut to ship.
 
 ---
 

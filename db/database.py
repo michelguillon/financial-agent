@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date, datetime
 from pathlib import Path
 
@@ -24,6 +25,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "finance.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 REAL_DATA_DIR = DATA_DIR / "real"
+
+# Per-request DB override for the web UI (C4). The FastAPI turn handler
+# sets this before calling run_turn so each session writes to its own
+# isolated DB. CLI / tests don't touch it; the default of None means
+# get_connection falls back to the module-level DB_PATH (or to a path
+# explicitly passed in, which still wins). ContextVars propagate across
+# asyncio.to_thread boundaries automatically in Python 3.10+.
+SESSION_DB_PATH: ContextVar[Path | None] = ContextVar("SESSION_DB_PATH", default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -40,11 +49,14 @@ sqlite3.register_converter("datetime", lambda b: datetime.fromisoformat(b.decode
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     """Open a SQLite connection with sensible defaults.
 
+    Precedence: explicit `db_path` arg > SESSION_DB_PATH ContextVar (web)
+    > module-level DB_PATH (CLI/tests).
+
     - row_factory = sqlite3.Row so callers can use column-name access
     - foreign_keys = ON for the day we add them
     - PARSE_DECLTYPES so DATE/DATETIME columns come back as native types
     """
-    path = db_path or DB_PATH
+    path = db_path or SESSION_DB_PATH.get() or DB_PATH
     conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")

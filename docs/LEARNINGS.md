@@ -1092,3 +1092,150 @@ fix didn't fully land), the next finding goes here.
 
 A3 edit: ~30 minutes of model time, $0 deterministic test cost, ~$0.10
 for the LLM-included run. Total: ~$0.10.
+
+---
+
+## C4 — web UI
+
+### Goal
+
+Recruiter-clickable demo hosted on the M720Q. Public URL, synthetic
+data only, ephemeral sessions, no real-data risk. Shows the agent
+reasoning through tool calls in real time — that visible reasoning IS
+the demo.
+
+### Methodology that worked
+
+**1. The Renderer protocol from Step 5 paid off here.**
+
+The agent loop talks to a `Renderer` for every visible event
+(`show_tool_call`, `show_tool_result`, `show_assistant_text`,
+`show_usage`, `show_error`). The CLI implementation prints via Rich;
+the web implementation pushes events into an asyncio.Queue. Same loop,
+zero changes to `run_turn` or the tools. The Step 5 design decision
+"render via a protocol, not via prints" turned out to be the load-bearing
+abstraction for the entire UI. If `run_turn` had been print-coupled,
+this whole project would have needed a refactor pass before C4 could
+begin.
+
+Lesson: when you write code that emits to a user, an early "Renderer
+takes structured events" interface costs nothing extra in the first
+implementation and unlocks every alternative front-end forever.
+
+**2. ContextVar for per-session state.**
+
+The agent's tools call `open_db()` with no arg, reading a module-level
+`DB_PATH`. For multi-user web hosting, every visitor needs their own DB,
+but threading an explicit `db_path` through `run_turn` and every tool
+function would be a refactor of dozens of call sites.
+
+Fix: a `SESSION_DB_PATH` ContextVar that `get_connection()` reads as
+fallback (after explicit arg, before module default). FastAPI handler
+sets it before invoking the agent. ContextVars propagate across
+`asyncio.to_thread` boundaries automatically in Python 3.10+, so the
+synchronous `run_turn` running in a worker thread still sees the
+per-request value. Verified explicitly with
+`tests/test_database.py::test_session_db_path_propagates_across_to_thread`
+— the kind of behaviour that's easy to assume and expensive to be
+wrong about.
+
+Same pattern would work for any per-request state we add later (current
+user, request ID for tracing, etc.).
+
+**3. Thread→async bridge via `loop.call_soon_threadsafe`.**
+
+`run_turn` is synchronous (must stay that way so the CLI still works).
+The web turn handler runs it in `asyncio.to_thread`. The renderer's
+callbacks fire from that worker thread but need to put events on an
+`asyncio.Queue` that the FastAPI route reads. `asyncio.Queue` is not
+thread-safe.
+
+The stdlib-clean bridge: `loop.call_soon_threadsafe(queue.put_nowait,
+event)`. Each callback schedules the put on the event loop. The async
+generator drains the queue and yields SSE strings. A `_SENTINEL` object
+gets pushed when `run_turn` returns (from its `finally` block, so it
+fires even on exception) to terminate the generator.
+
+Subtle race: the `finally` block runs BEFORE the function actually
+returns to `to_thread`, so the sentinel arrives at the consumer while
+the task is technically still running. Calling `.result()` on the task
+in that window raises `InvalidStateError`. Fix: `await run_turn_task`
+before reading the result, not `.result()`. Caught only because of the
+test — would have shipped silently broken otherwise.
+
+**4. Cost cap as a property of the API surface, not just a budget alert.**
+
+The cap (`$0.50/session`) is checked BEFORE every API call: if
+`cost_usd + estimated_next_turn_cost > BUDGET_USD`, emit
+`budget.exceeded` and don't call Anthropic. Estimated-next-turn is a
+generous constant (`$0.06`) so the cap trips before the expensive turn
+starts; worst-case overshoot from one in-flight turn is ~$0.10. This
+matches the preview-before-apply pattern from the classification flow:
+make safety a property of the *surface*, not a hope about behaviour.
+
+### Surprises
+
+**`except E as e: ... yield e.foo` in a generator closure is a bug.**
+Python's `except E as e:` rebinding deletes `e` after the except block
+exits, so a closure created inside the except can't reference `e` when
+it runs later (in an async generator, "later" is when the consumer
+iterates). Capture the values into locals before defining the closure.
+Caught by the budget-exceeded test on first run. Standard Python
+footgun but easy to miss.
+
+**Multi-stage Docker build is the right call for this app.**
+Node + Python in one image would have been ~1.3GB and dragged 200+ npm
+packages into the runtime. Multi-stage (Node 22-slim → Python 3.13-slim
+with just the built `dist/` copied across) lands at ~400MB and keeps
+the runtime image minimal. The build-time cost is one extra stage; the
+runtime cost is zero.
+
+**Tailwind v4's `@import "tailwindcss"` is one line of CSS.**
+v4's Vite plugin auto-detects content paths from imports. No
+`tailwind.config.js`, no `content: [...]` glob. ~30 lines of config
+eliminated relative to v3. Worth noting because the v3 tutorials still
+dominate search results; the v4 way is materially simpler.
+
+### What got cut to ship
+
+- **Auth, sessions across browser restarts, multi-region.** Out of
+  scope by design — demo is ephemeral.
+- **D2 (transcript replay).** Would let recruiters watch a sample
+  conversation without burning their budget. Natural follow-up; PHASE_2
+  backlog notes this.
+- **True token streaming.** Today the SSE granularity is block-level
+  (one event per `Renderer` callback). Token-by-token would need
+  `client.messages.stream()` + agent-loop changes. The block-level
+  cadence already feels responsive (~1s per tool call, ~1s per text
+  block) because Sonnet returns fast.
+- **A `/admin/stats` endpoint** showing today's session count + spend.
+  Useful for monitoring abuse; not blocking the demo. Add if the live
+  URL starts attracting bot traffic.
+- **C3 (history summarisation).** Per-turn token cost is bounded by the
+  $0.50 cap (10 turns max), so accumulated message size doesn't matter
+  in practice. Skip unless we raise the cap.
+
+### Hand-off
+
+The web UI is the natural arrival point for the agent's portfolio
+chapter. From here:
+- D2 (transcript replay) would extend the existing SSE event protocol
+  — record a session's events to disk, then replay them through the
+  same frontend at typing speed. Cheap, demo-quality win.
+- B1 (code gate for `apply_classification_rule` /
+  `apply_taxonomy_extension`) is more important now: a public URL means
+  prompt-injection attempts will happen. The current "prompt-instructed
+  approval" contract holds for a well-behaved agent but is exactly the
+  kind of thing a hostile user would probe.
+- A monitoring story (basic /admin/stats or just structured logging to
+  the M720Q's existing log aggregation) before broad sharing.
+
+### Cost
+
+C4 edit: ~3 hours of model time, $0 in API costs (mocked `run_turn` in
+tests means no Anthropic calls during dev). Deployment costs are zero
+since the M720Q is already running and the tunnel is already set up.
+At the demo's per-session cap of $0.50 and per-IP limit of 3/day,
+worst-case monthly spend from a single abusive IP = $45; realistic
+expected spend (a few real recruiters/month, each doing ~5 turns) ≈
+$1-3.

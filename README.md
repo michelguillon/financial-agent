@@ -10,9 +10,11 @@ after the interview — the classifier gets smarter with each approved rule,
 and the same agent loop powers both the maintenance task and the planning
 conversations.
 
-> **Status:** Steps 1–5 complete (synthetic data, SQLite, classifier
-> wrapper, tools + Docker, agent loop). Step 6 (web UI) is optional —
-> see [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence).
+> **Status:** All six build steps shipped, plus Phase 2 (pytest, rules
+> table migration, taxonomy expansion, extend_taxonomy tool, web UI).
+> **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
+> ephemeral sessions, $0.50 per-session budget cap._
+> See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done.
 
 ---
 
@@ -62,7 +64,7 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 | 3 | SQLite-first rule lookup wrapper | ✅ |
 | 4 | Tool implementations (13 tools) + Docker | ✅ |
 | 5 | Agent loop (Sonnet 4.6 + Haiku 4.5 + prompt caching) | ✅ |
-| 6 | UI (optional — CLI demo first) | ⏳ |
+| 6 | Web UI (FastAPI + React + Vite + Tailwind, SSE streaming) | ✅ |
 
 Methodology notes and surprises from each step are logged in
 [docs/LEARNINGS.md](docs/LEARNINGS.md). The aim is that the *how* of each step is

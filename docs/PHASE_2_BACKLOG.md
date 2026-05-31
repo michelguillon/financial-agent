@@ -65,11 +65,13 @@ Shipped: 47 deterministic tests in ~8s + 2 `@pytest.mark.llm` tests gated by `RU
 **Where from.** [LEARNINGS — Step 5, agent loop in production](LEARNINGS.md#step-5--agent-loop) ("For very long sessions, periodic summarisation of older turns into agent_state entries (rather than keeping every turn in the messages array forever) is the natural next optimisation").
 **Scope.** Day. Trigger heuristic (turn count? token count?), summarisation prompt, agent_state schema for session-summary entries, and the next-turn assembly that injects the summary into context.
 
-### C4 — Web UI (React + FastAPI)
-**What.** Browser front-end for the agent, replacing the CLI. FastAPI endpoint wraps `run_turn`; React renders the tool calls/results/responses the same way `agent/cli.py` does today.
-**Why.** Demo-quality UI for the portfolio (CLI is fine for engineers; recruiters benefit from a clickable demo). SPEC §8 Step 6 — explicitly optional, post-Week-2.
-**Where from.** [SPEC §8 Step 6](SPEC_AGENT.md#8-build-sequence).
-**Scope.** Week+. The agent loop is already clean enough to drop into FastAPI (Renderer protocol from Step 5 means the rendering and the loop are decoupled). The real work is the React UI and the deployment story (the M720q home server can host both).
+### ~~C4 — Web UI (React + FastAPI)~~ ✓ Done (2026-05-31)
+Shipped: FastAPI + React + Vite + Tailwind, single multi-stage Docker image. Per-session DB isolation via `SESSION_DB_PATH` ContextVar. Per-session cost cap ($0.50) + per-IP rate limit (3/day) baked in before API spend. SSE streaming via `WebSseRenderer`. See [LEARNINGS — C4](LEARNINGS.md#c4--web-ui). Run locally: `docker compose -f docker-compose.yml -f docker-compose.web.yml up web`.
+
+**Residual / natural follow-ups:**
+- **D2 (transcript replay)** — extends the existing SSE event protocol; would let recruiters watch a sample conversation without burning their budget.
+- **B1 (code gate)** — more important now that the agent is exposed publicly; protects `apply_classification_rule` + `apply_taxonomy_extension` against prompt-injection.
+- **/admin/stats endpoint** — today's session count + spend, surfaceable to operator only.
 
 ---
 

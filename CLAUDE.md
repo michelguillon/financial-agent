@@ -58,6 +58,34 @@ The redacted classifier and the synthetic data generator share the same placehol
 
 ---
 
+## Web UI (C4)
+
+The recruiter-clickable demo lives in [web/](web/). Backend = FastAPI (`web/backend/`), frontend = React + Vite + Tailwind (`web/frontend/`). One Docker image, multi-stage build (node compiles the React bundle, python serves both API and the built static files).
+
+```powershell
+# Build + run locally
+docker compose -f docker-compose.yml -f docker-compose.web.yml build web
+docker compose -f docker-compose.yml -f docker-compose.web.yml up web
+# Browse http://localhost:8000
+
+# Backend tests (deterministic, no API)
+docker compose -f docker-compose.yml -f docker-compose.web.yml run --rm web pytest tests/test_web.py -v
+
+# Frontend dev (hot reload, proxies /api to backend on :8000)
+cd web/frontend && npm install && npm run dev      # serves http://localhost:5173
+```
+
+Guardrails baked in:
+- **Per-session DB** ([web/backend/sessions.py](web/backend/sessions.py)) — each visitor gets a `shutil.copy` of the seed DB under `/tmp/agent-sessions/<id>/`. Threaded via the `SESSION_DB_PATH` ContextVar in [db/database.py](db/database.py).
+- **Per-session cost cap** ([web/backend/limits.py](web/backend/limits.py)) — $0.50, checked before every turn so an over-budget request never spends.
+- **Per-IP rate limit** — 3 sessions / 24h, in-memory.
+
+Reset the in-memory rate-limit counter in dev: restart the container (`docker compose ... restart web`). State is process-local.
+
+The demo runs synthetic-data-only forever — real-data ingestion via the web is explicitly out of scope.
+
+---
+
 ## Verify-by-running (pytest)
 
 The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). Deterministic tests run in <10s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS.md#b2--pytest-adoption).

@@ -1,0 +1,20 @@
+# Overlay for the web demo service. Use as:
+#   docker compose -f docker-compose.yml -f docker-compose.web.yml up web
+# or for tests:
+#   docker compose -f docker-compose.yml -f docker-compose.web.yml run --rm web pytest tests/test_web.py
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: personal-finance-agent-web
+    image: personal-finance-agent-web:latest
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    # No volume mounts on purpose — per-session state lives in /tmp/agent-sessions
+    # inside the container and dies with it. The demo is ephemeral.
+    restart: unless-stopped
