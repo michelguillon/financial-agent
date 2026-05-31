@@ -997,3 +997,98 @@ A3 (`extend_taxonomy` tool) is now a small follow-up. The shape:
 A1 + A2 combined edit: ~50 minutes of model time, $0 in API costs
 (round-trip verifier is deterministic). The final LLM-included test
 run cost ~$0.10. Total: ~$0.10 for the whole bundle.
+
+---
+
+## A3 — extend_taxonomy tool
+
+### Goal
+
+Make taxonomy growth a first-class agent capability. A1+A2 left the
+agent able to mutate the rules table (via `apply_classification_rule`)
+without any explicit signal that a new `(main, sub, sub2)` tuple was
+being introduced. A3 adds a paired preview/apply tool that validates
+the tuple is genuinely new and rejects 0-match patterns, so the new
+category is guaranteed to land on actual data.
+
+### Methodology that worked
+
+**1. Thin wrappers over the existing preview/apply functions.**
+
+The temptation was to reimplement everything. Instead `preview_taxonomy_extension`
+just calls `preview_rule_application` after a validation check, and
+`apply_taxonomy_extension` just calls `apply_classification_rule`. Two
+extra functions, ~30 lines of net new code, zero schema change. The
+SCHEMAS entries make them addressable from the agent loop; everything
+else is reuse.
+
+The pattern: when adding a more-specific variant of an existing
+capability, the new tool is a *validator-wrapper*, not a fork. Same SQL
+path, same write semantics, different validation boundary at the front.
+
+**2. Reject-at-preview as the load-bearing invariant.**
+
+The fork in the plan was what to do when a new tuple's pattern matches
+0 Missing rows. Three options were on the table: reject, allow with
+phantom category, allow + extend `list_categories()` to union with
+the rules table. Picked reject — it keeps the invariant "the live
+taxonomy reflects actual data" intact. The cost is a slightly chatty
+agent flow (if the user asks to add a category for a merchant that
+isn't yet in Missing, the agent has to say "no matches; come back
+when one arrives or use a broader pattern"), but the gain is no
+phantom entries to clean up later.
+
+This is a tradeoff worth being explicit about: invariant-preserving
+strictness often produces slightly worse UX in unusual cases and
+materially better behaviour everywhere else. Same reasoning that drove
+the preview-before-apply default.
+
+**3. Test the rejection paths explicitly.**
+
+Easy to write the happy-path test and forget the rejection paths.
+`tests/test_classification.py` got three tests for the new flow's
+guards: rejects-existing-tuple, rejects-zero-matches, apply-also-rejects-existing.
+Each one asserts the specific error message substring the agent will
+see — if a future refactor changes the message, the test catches it and
+prompts an explicit update to the agent's expected error vocabulary.
+
+### Surprises
+
+**`re.search` → `re.match` was a one-line classifier prompt fix too.**
+A1 changed SQLite's REGEXP backing function from `re.search` to `re.match`
+to preserve the original chain's start-anchored semantics, but the
+`suggest_classification` system prompt at
+[agent/tools/classification.py:_SYSTEM_PROMPT](../agent/tools/classification.py)
+still told Haiku "Python's re.search applied case-insensitively". The
+fix is one paragraph in the prompt — but if A3 hadn't been the next
+pass, Haiku would have kept producing patterns under the wrong mental
+model indefinitely, silently failing on memos that don't start with the
+merchant name. Lesson: when changing a regex engine's semantics, grep
+for every place the old semantics were documented to callers (model
+prompts included).
+
+**Synthetic data picked the test merchant.** The synthetic generator's
+`NOISE_MEMOS` pool includes APPLE.COM/BILL, which doesn't match any
+seed rule, so it reliably lands in Missing across the synthetic CSV.
+That made `("Shopping", "digital", "apps")` + `.*APPLE\\.COM` the
+perfect test fixture for the new-taxonomy-entry flow — no SQL fixture
+setup needed, just point the test at what's already there. Worth
+noticing when designing synthetic data: pre-seeded "unmatched" merchants
+double as test fixtures for any future tool that touches Missing.
+
+### Hand-off
+
+A3 is the natural endpoint of the A* track for now. Remaining backlog:
+B1 (code gate for apply_classification_rule — would also protect
+apply_taxonomy_extension once added), C1 (real-data ingestion), C2
+(Batch API for Missing classification), C3 (session history
+summarisation), B3 (slim down bank_statement_parser), CI residual,
+D1–D3 polish.
+
+If the agent starts producing patterns that under-match (i.e., the prompt
+fix didn't fully land), the next finding goes here.
+
+### Cost
+
+A3 edit: ~30 minutes of model time, $0 deterministic test cost, ~$0.10
+for the LLM-included run. Total: ~$0.10.

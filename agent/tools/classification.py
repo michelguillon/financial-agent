@@ -212,6 +212,146 @@ def apply_classification_rule(
 
 
 # ---------------------------------------------------------------------------
+# Taxonomy extension (A3) — preview + apply for NEW (main, sub, sub2) tuples
+# ---------------------------------------------------------------------------
+
+def _validate_taxonomy_extension(
+    category_main: str,
+    category_sub: str | None,
+    category_sub2: str | None,
+    source: str | None,
+) -> None:
+    """Raise ValueError if (main, sub, sub2) already exists in the taxonomy.
+
+    Reads the live taxonomy from list_categories() (transactions table).
+    A tuple is "new" if at least one component is not present in the current
+    taxonomy under its parent. If the full tuple already appears, the agent
+    should use apply_classification_rule instead.
+    """
+    taxonomy = list_categories(source=source)
+    existing_subs = taxonomy.get(category_main, {})
+    existing_sub2s = existing_subs.get(category_sub, [])
+    if category_sub in existing_subs and category_sub2 in existing_sub2s:
+        raise ValueError(
+            f"Taxonomy entry ({category_main!r}, {category_sub!r}, "
+            f"{category_sub2!r}) already exists. Use apply_classification_rule "
+            "instead — this isn't a new taxonomy entry."
+        )
+
+
+def preview_taxonomy_extension(
+    category_main: str,
+    category_sub: str | None,
+    category_sub2: str | None,
+    pattern: str,
+    details: str | None = None,
+    source: str | None = None,
+    sample_limit: int = 5,
+) -> dict:
+    """Preview adding a new taxonomy entry + the rule that populates it.
+
+    No DB writes. Validates:
+      1. The (main, sub, sub2) tuple is genuinely new (not in list_categories).
+      2. The pattern matches at least one Missing row — taxonomy stays
+         grounded in actual data; no phantom categories.
+
+    Returns:
+        {
+          is_new: True,
+          proposed_taxonomy_entry: {main, sub, sub2},
+          would_match: N,
+          sample_matches: [{id, date, amount, memo, account_name}, ...],
+        }
+
+    Raises ValueError on validation failure (caller decides whether to
+    retry with a different pattern or use apply_classification_rule).
+    """
+    _validate_taxonomy_extension(category_main, category_sub, category_sub2, source)
+    preview = preview_rule_application(
+        pattern=pattern,
+        category_main=category_main,
+        category_sub=category_sub,
+        category_sub2=category_sub2,
+        details=details,
+        source=source,
+        sample_limit=sample_limit,
+    )
+    if preview["would_match"] == 0:
+        raise ValueError(
+            f"Pattern {pattern!r} matches 0 Missing rows. extend_taxonomy "
+            "requires at least one match so the new category lands on actual "
+            "data — try a broader pattern, or wait for matching transactions."
+        )
+    return {
+        "is_new": True,
+        "proposed_taxonomy_entry": {
+            "category_main": category_main,
+            "category_sub": category_sub,
+            "category_sub2": category_sub2,
+        },
+        "would_match": preview["would_match"],
+        "sample_matches": preview["sample_matches"],
+    }
+
+
+def apply_taxonomy_extension(
+    category_main: str,
+    category_sub: str | None,
+    category_sub2: str | None,
+    pattern: str,
+    details: str | None = None,
+    source: str | None = None,
+) -> dict:
+    """Add a new taxonomy entry by inserting the seed rule + reclassifying.
+
+    Re-validates (don't trust preview): the tuple must still be unprecedented
+    and the pattern must still match >0 Missing rows. Delegates the write
+    to apply_classification_rule.
+
+    Returns:
+        {
+          taxonomy_entry_added: {main, sub, sub2},
+          rule_id: N,
+          transactions_reclassified: M,
+        }
+    """
+    _validate_taxonomy_extension(category_main, category_sub, category_sub2, source)
+
+    # Re-check match count before mutating.
+    src = source or get_data_source()
+    with open_db() as conn:
+        register_regexp(conn)
+        (n,) = conn.execute(
+            "SELECT COUNT(*) FROM transactions "
+            "WHERE category_main = 'Missing' AND data_source = ? AND memo REGEXP ?",
+            (src, pattern),
+        ).fetchone()
+    if n == 0:
+        raise ValueError(
+            f"Pattern {pattern!r} matches 0 Missing rows. extend_taxonomy "
+            "requires at least one match."
+        )
+
+    result = apply_classification_rule(
+        pattern=pattern,
+        category_main=category_main,
+        category_sub=category_sub,
+        category_sub2=category_sub2,
+        details=details,
+        source=source,
+    )
+    return {
+        "taxonomy_entry_added": {
+            "category_main": category_main,
+            "category_sub": category_sub,
+            "category_sub2": category_sub2,
+        },
+        "rule_id": result["rule_id"],
+        "transactions_reclassified": result["transactions_reclassified"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # suggest_classification — Haiku 4.5 call
 # ---------------------------------------------------------------------------
 
@@ -269,9 +409,10 @@ this memo and future similar ones.
 Rules:
 - Use category names exactly as they appear in the taxonomy below.
 - If no existing category is a good fit, set category_main to "Missing".
-- The regex is Python's re.search applied case-insensitively against the
-  memo. Make it general enough to match future variants (different store
-  numbers, dates, IDs) but specific enough to avoid false positives.
+- The regex is matched with Python's re.match (start-anchored,
+  case-insensitive) against the memo. Prefix with `.*` to match anywhere
+  in the memo. Make it general enough to match future variants (different
+  store numbers, dates, IDs) but specific enough to avoid false positives.
 - For UK merchants, account for common bank-statement formatting (uppercase,
   trailing numbers, location suffixes).
 
@@ -403,7 +544,10 @@ SCHEMAS = [
             "Write the rule to classification_rules AND retroactively "
             "reclassify all matching Missing transactions in one DB "
             "transaction. ONLY call after the user has explicitly approved "
-            "the preview from preview_rule_application."
+            "the preview from preview_rule_application. Use ONLY for rules "
+            "that map to a category already in the taxonomy. For NEW "
+            "taxonomy entries, use preview_taxonomy_extension / "
+            "apply_taxonomy_extension instead."
         ),
         "input_schema": {
             "type": "object",
@@ -415,6 +559,53 @@ SCHEMAS = [
                 "details": {"type": ["string", "null"]},
             },
             "required": ["pattern", "category_main"],
+        },
+    },
+    {
+        "name": "preview_taxonomy_extension",
+        "description": (
+            "Preview adding a NEW taxonomy entry (main / sub / sub2 tuple "
+            "not currently in the taxonomy). Validates the tuple is "
+            "unprecedented and the pattern matches at least one Missing row. "
+            "No DB writes. Use this when the user encounters a transaction "
+            "that doesn't fit any existing category and a new bucket is "
+            "warranted (e.g. adding 'Health/Mental/therapy' for HEADSPACE). "
+            "Call list_categories first to confirm the tuple is genuinely new."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category_main": {"type": "string"},
+                "category_sub": {"type": ["string", "null"]},
+                "category_sub2": {"type": ["string", "null"]},
+                "pattern": {
+                    "type": "string",
+                    "description": "Python regex (start-anchored via re.match, case-insensitive). Prefix with `.*` to match anywhere.",
+                },
+                "details": {"type": ["string", "null"]},
+            },
+            "required": ["category_main", "pattern"],
+        },
+    },
+    {
+        "name": "apply_taxonomy_extension",
+        "description": (
+            "Add a new taxonomy entry by inserting the seed rule into "
+            "classification_rules and reclassifying matching Missing rows in "
+            "one transaction. ONLY call after the user has approved the "
+            "preview from preview_taxonomy_extension. Re-validates that the "
+            "tuple is still new and the pattern still matches >0 rows."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category_main": {"type": "string"},
+                "category_sub": {"type": ["string", "null"]},
+                "category_sub2": {"type": ["string", "null"]},
+                "pattern": {"type": "string"},
+                "details": {"type": ["string", "null"]},
+            },
+            "required": ["category_main", "pattern"],
         },
     },
 ]

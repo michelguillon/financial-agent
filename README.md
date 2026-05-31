@@ -60,7 +60,7 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 | 1 | Synthetic data generator (15y of UK transactions) | ✅ |
 | 2 | SQLite schema + CSV ingestion | ✅ |
 | 3 | SQLite-first rule lookup wrapper | ✅ |
-| 4 | Tool implementations (11 tools) + Docker | ✅ |
+| 4 | Tool implementations (13 tools) + Docker | ✅ |
 | 5 | Agent loop (Sonnet 4.6 + Haiku 4.5 + prompt caching) | ✅ |
 | 6 | UI (optional — CLI demo first) | ⏳ |
 
@@ -173,7 +173,7 @@ financial-agent/
 │   ├── transcript.py               JSONL session logger
 │   ├── __main__.py                 REPL entry: `python -m agent`
 │   ├── claude_helpers.py           Anthropic client + retry + model constants
-│   ├── tool_registry.py            schemas + dispatch (11 tools)
+│   ├── tool_registry.py            schemas + dispatch (13 tools)
 │   └── tools/                      state, classification, scenarios
 ├── classifier/
 │   ├── bank_statement_parser.py    redacted copy of the private classifier

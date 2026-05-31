@@ -420,6 +420,32 @@ Returns the full category taxonomy derived from existing transactions. Used by t
 }
 ```
 
+---
+
+```python
+preview_taxonomy_extension(
+    category_main: str,
+    category_sub: str | None,
+    category_sub2: str | None,
+    pattern: str,
+    details: str | None = None
+) -> dict
+```
+Preview adding a NEW `(main, sub, sub2)` tuple to the taxonomy via a seed rule. Validates (a) the tuple is genuinely new (not in `list_categories()`) and (b) the pattern matches at least one Missing row. Raises `ValueError` on either failure. No DB writes. Returns `{is_new: True, proposed_taxonomy_entry, would_match, sample_matches}`.
+
+```python
+apply_taxonomy_extension(
+    category_main: str,
+    category_sub: str | None,
+    category_sub2: str | None,
+    pattern: str,
+    details: str | None = None
+) -> dict
+```
+Inserts the rule into `classification_rules` (`added_by='agent'`, `approved_by='human'`) and reclassifies matching Missing rows in one SQL transaction. Re-validates before mutating. Returns `{taxonomy_entry_added, rule_id, transactions_reclassified}`.
+
+**Why this is a separate tool from `apply_classification_rule`.** Both write to `classification_rules`, but `apply_taxonomy_extension` validates that the proposed `(main, sub, sub2)` tuple is unprecedented. This makes "I am growing the taxonomy" an explicit agent action distinct from "I am adding a rule for an existing category". The agent calls `list_categories` first to decide which tool applies. A3 added these tools — see [LEARNINGS — A3](LEARNINGS.md#a3--extend_taxonomy-tool).
+
 ### 5.2 Scenario Tools
 
 ```python

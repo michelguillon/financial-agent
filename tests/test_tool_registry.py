@@ -25,5 +25,5 @@ def test_unknown_tool_raises_keyerror():
 
 
 def test_registered_count_matches_modules():
-    # 11 tools total across state (2), classification (5), scenarios (4)
-    assert len(ANTHROPIC_TOOLS) == 11
+    # 13 tools total across state (2), classification (7), scenarios (4)
+    assert len(ANTHROPIC_TOOLS) == 13

@@ -16,12 +16,8 @@ Shipped: ~40 rules ported to [classifier/rules_seed.py](../classifier/rules_seed
 ### ~~A2 — Taxonomy expansion (Travel main, rail sub, video sub)~~ ✓ Done (2026-05-31)
 Shipped alongside A1: `Travel/accommodation/hotel`, `Transport/rail`, `Leisure/subscription/video` added to the taxonomy with baseline pre-classified rows (BOOKING.COM, AVANTI WEST COAST, NOW TV). NETFLIX/AIRBNB/TRAINLINE/DISNEY+ deliberately stay in `NOISE_MEMOS` as Missing so the agent demo loop has classification work in the new categories. Test coverage: `tests/test_classification.py:test_a2_new_subs_present_in_taxonomy`.
 
-### A3 — `extend_taxonomy(main, sub, sub2)` tool
-**What.** New agent tool that adds a new taxonomy entry with human approval, then optionally re-runs a list of Missing rows through `suggest_classification` to surface ones that would now fit.
-**Why.** Makes the taxonomy evolvable through the agent itself rather than requiring source edits. Closes the loop the LEARNINGS Step 4 entry pointed at.
-**Where from.** Plan-mode discussion before Step 4 ("How to handle the taxonomy gaps" → "Add a tool" was the third option).
-**Scope.** Half-day. New tool + schema + preview/apply pair (per the project-wide preview-before-apply default). Needs to write to a `taxonomy_extensions` table (new) or hold the list elsewhere — SPEC update needed.
-**Depends on.** ~~A1~~ — unblocked, A1 shipped 2026-05-31. The natural follow-up: a tool that inserts rows into `classification_rules` with `added_by='agent'` (which `db/seed_rules.py` already leaves alone on re-seed) and writes an audit entry. See [LEARNINGS — A1+A2 → Hand-off to A3](LEARNINGS.md#a1--a2--rules-into-table--taxonomy-expansion).
+### ~~A3 — `extend_taxonomy(main, sub, sub2)` tool~~ ✓ Done (2026-05-31)
+Shipped: paired `preview_taxonomy_extension` + `apply_taxonomy_extension` tools in [agent/tools/classification.py](../agent/tools/classification.py). Validates the proposed tuple is unprecedented (rejects if `list_categories()` already returns it) and that the pattern matches >0 Missing rows (rejects to keep the taxonomy grounded in actual data — no phantom categories). Wraps the existing preview/apply rule path; no new schema. Bonus: fixed the stale `re.search` → `re.match` mention in `suggest_classification`'s system prompt (semantics changed in A1). See [LEARNINGS — A3](LEARNINGS.md#a3--extend_taxonomy-tool).
 
 ---
 
