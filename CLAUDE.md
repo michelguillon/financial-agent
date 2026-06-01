@@ -84,6 +84,8 @@ Guardrails baked in:
 
 The header has a Live/Replay toggle. Replay mode streams a curated transcript from [web/replays/](web/replays/) through the existing `WebSseRenderer` event protocol — so recruiters can watch a canned demo without spending their budget. Replay routes (`GET /api/replays`, `GET /api/replays/{id}/stream`) deliberately bypass the cost cap, session DB, and rate limit (they're a public read of bundled content with no API call). To add another canned demo: drop a JSONL into `web/replays/` and add an entry to `REPLAY_CATALOGUE` in [web/backend/replays.py](web/backend/replays.py).
 
+Operator monitoring: `GET /admin/stats` returns a JSON snapshot (session counts, demo spend, replay streams, rate-limit rejections) gated by `X-Admin-Token` matched against the `ADMIN_TOKEN` env var. Unset by default → 503 ("admin disabled"). Run locally with `-e ADMIN_TOKEN=devtoken` and `curl -H "X-Admin-Token: devtoken" http://localhost:8000/admin/stats | jq .`. Counters live on `app.state.stats` (in-memory; restart wipes).
+
 Reset the in-memory rate-limit counter in dev: restart the container (`docker compose ... restart web`). State is process-local.
 
 The demo runs synthetic-data-only forever — real-data ingestion via the web is explicitly out of scope.

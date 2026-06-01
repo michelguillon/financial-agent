@@ -1605,3 +1605,97 @@ demo-hardening backlog would close this gap.
 D2-followup edit: ~1.5 hours of model time. Zero API costs. 5 new web
 tests added; the full web suite is now 13 tests in ~21s, the
 agent-side full suite is unchanged at 100 in ~63s.
+
+---
+
+## Admin stats
+
+### Goal
+
+C4 ships behind a public tunnel. B1 + D2 + the web-replay toggle added
+more behaviour. Today the operator has zero visibility — no way to
+answer "is anyone using the demo today, how much spend, has anyone hit
+the rate limit, are replays getting clicked." `/admin/stats` closes
+that gap with a JSON snapshot behind a shared-secret header.
+
+### What shipped
+
+`web/backend/stats.py` holds a single mutable `Stats` dataclass pinned
+to `app.state.stats` (single-process, single-worker — already
+constrained in `web/backend/main.py`, so no locking is needed). The
+three existing routes each gained one or two lines that call
+`stats.record_*(...)` methods. A new `GET /admin/stats` route gates on
+`hmac.compare_digest` of the `X-Admin-Token` header against the
+`ADMIN_TOKEN` env var; the env unset → 503 by design so the endpoint
+is invisible in dev.
+
+The endpoint mixes lifetime counters (sessions created total, spend
+USD total, replays by id) with live read-throughs for fields where
+some other component is authoritative — `sessions.active` reads from
+`SessionManager.active_count()`, `unique_ips_seen_today` and
+`events_today` read from a new `RateLimiter.snapshot()`. Two sources
+of truth would have been a counter-divergence bug waiting to happen.
+
+### Methodology that worked
+
+**One struct, explicit increment methods.** Compared to scattered
+counter variables, `Stats` with named methods (`record_session_created`,
+`record_turn(kind=...)`, `record_replay_started(id)`) gives one place
+to read the per-action observability story and one place to assert
+against in tests. The dataclass has 11 fields; with scattered globals
+this would have been 11 module-level integers and a lot of
+"where does this get set?" archeology.
+
+**Auth via env var, default off.** `ADMIN_TOKEN` unset → 503. No
+accidental exposure in dev or first-deploy. The 503 vs 401 distinction
+is deliberate — 503 says "this endpoint isn't currently enabled,"
+which is honest about the config state without revealing whether the
+deployer is intentionally locking it.
+
+**Stats live on `app.state`, fresh per TestClient lifespan.** The
+existing `client` fixture in `tests/test_web.py` already builds a
+fresh TestClient per test, which triggers the FastAPI lifespan and
+constructs a new `Stats` instance each time. Tests can assert
+absolute counts (`== 1`) rather than deltas. Free correctness from
+the existing fixture shape.
+
+### Surprises
+
+**`replay_stream` is async + long-lived.** I had to choose where to
+increment the replay counter: at the top of the handler (counts every
+start, even aborts) or after the SSE generator completes (counts only
+fully-watched replays). Picked "at the top, after the 404 check"
+because aborts and disconnects shouldn't undercount; "stream started"
+is the honest semantic. Documented in the route.
+
+**Cost-delta computation is one line.** `cost_delta = max(0,
+ws.agent_session.cost_usd - cost_before)` after `run_turn` returns.
+Works for happy paths AND mid-turn failures (which can have partial
+spend) because `cost_usd` is incremented by the agent loop on each
+API call before any exception. The `max(0, ...)` guards against
+weird negatives from instrumentation bugs.
+
+**hmac.compare_digest vs ==**. Constant-time comparison matters even
+for headers, because timing attacks on token comparison are a real
+class of bug. Free with the stdlib; no excuse not to use it.
+
+### Decisions I'd revisit
+
+**No per-IP detail in the response.** That's PII-adjacent and only
+valuable mid-incident. A separate `/admin/ips` could expose it later;
+this endpoint stays clean.
+
+**No persistence across restart.** Matches everything else in the web
+app. The day someone wants weekly aggregates is the day this should
+land in SQLite under `/tmp/agent-sessions/`. Today, restart = reset is
+fine and the `started_at` field in the response makes the reboot
+visible.
+
+**JSON only.** No HTML view, no Prometheus exporter. The operator can
+pipe through `jq` or `curl` from any client. If a real dashboard
+becomes useful, the JSON is the natural input.
+
+### Cost
+
+Admin-stats edit: ~1 hour of model time. Zero API costs. 8 new web
+tests added; the full web suite is now 21 tests in ~24s.

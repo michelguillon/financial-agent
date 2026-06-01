@@ -267,3 +267,86 @@ def test_replay_bypasses_rate_limit_and_session(client: TestClient):
         assert r.status_code == 200, (
             f"replay stream should be free of rate-limit gating, got {r.status_code}"
         )
+
+
+# ---------------------------------------------------------------------------
+# /admin/stats
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def admin_client(monkeypatch) -> Iterator[TestClient]:
+    """A client that boots with ADMIN_TOKEN set. Use this for tests that
+    need the admin endpoint to actually be reachable."""
+    monkeypatch.setenv("ADMIN_TOKEN", "test-token")
+    with TestClient(app) as c:
+        yield c
+
+
+ADMIN_HEADERS = {"X-Admin-Token": "test-token"}
+
+
+def test_admin_stats_503_when_disabled(client: TestClient, monkeypatch):
+    # Default `client` fixture doesn't set ADMIN_TOKEN — endpoint should
+    # 503 rather than expose anything.
+    monkeypatch.delenv("ADMIN_TOKEN", raising=False)
+    r = client.get("/admin/stats", headers=ADMIN_HEADERS)
+    assert r.status_code == 503
+    assert "ADMIN_TOKEN" in r.json()["detail"]
+
+
+def test_admin_stats_401_on_missing_token(admin_client: TestClient):
+    r = admin_client.get("/admin/stats")
+    assert r.status_code == 401
+
+
+def test_admin_stats_401_on_wrong_token(admin_client: TestClient):
+    r = admin_client.get("/admin/stats", headers={"X-Admin-Token": "wrong"})
+    assert r.status_code == 401
+
+
+def test_admin_stats_shape_when_authorised(admin_client: TestClient):
+    r = admin_client.get("/admin/stats", headers=ADMIN_HEADERS)
+    assert r.status_code == 200
+    body = r.json()
+    assert {"process", "sessions", "turns", "replays"} <= set(body.keys())
+    assert "uptime_seconds" in body["process"]
+    assert body["sessions"]["active"] == 0
+    assert body["sessions"]["created_total"] == 0
+    assert body["turns"]["completed_total"] == 0
+    assert body["replays"]["streams_started_total"] == 0
+    assert body["replays"]["by_id"] == {}
+
+
+def test_admin_stats_increments_on_session_create(admin_client: TestClient):
+    admin_client.post("/api/sessions")
+    body = admin_client.get("/admin/stats", headers=ADMIN_HEADERS).json()
+    assert body["sessions"]["created_total"] == 1
+    assert body["sessions"]["active"] == 1
+
+
+def test_admin_stats_increments_on_turn(admin_client: TestClient, mock_run_turn):
+    session_id = admin_client.post("/api/sessions").json()["session_id"]
+    admin_client.post(f"/api/sessions/{session_id}/turn", json={"user_text": "hi"})
+    body = admin_client.get("/admin/stats", headers=ADMIN_HEADERS).json()
+    assert body["turns"]["completed_total"] == 1
+    assert body["turns"]["spend_usd_total"] > 0
+    assert body["turns"]["last_turn_at"] is not None
+
+
+def test_admin_stats_increments_on_replay(admin_client: TestClient):
+    r = admin_client.get("/api/replays/demo_3turn/stream?delay=0")
+    assert r.status_code == 200
+    body = admin_client.get("/admin/stats", headers=ADMIN_HEADERS).json()
+    assert body["replays"]["streams_started_total"] == 1
+    assert body["replays"]["by_id"]["demo_3turn"] == 1
+    assert body["replays"]["last_replay_at"] is not None
+
+
+def test_admin_stats_counts_rate_limit_rejections(admin_client: TestClient):
+    # 4th call exceeds MAX_SESSIONS_PER_IP_PER_DAY = 3.
+    for _ in range(3):
+        assert admin_client.post("/api/sessions").status_code == 201
+    assert admin_client.post("/api/sessions").status_code == 429
+    body = admin_client.get("/admin/stats", headers=ADMIN_HEADERS).json()
+    assert body["sessions"]["rate_limit_rejections_total"] == 1
+    assert body["sessions"]["created_total"] == 3

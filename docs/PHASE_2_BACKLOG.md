@@ -96,11 +96,14 @@ Shipped: a Live/Replay segmented toggle in the web UI header that flips to a pac
 
 ---
 
-## Suggested ordering (updated post-D2 web replay)
+### ~~/admin/stats — operator monitoring~~ ✓ Done (2026-06-01)
+Shipped: [GET /admin/stats](../web/backend/app.py) returns a JSON snapshot of session counts, demo spend, replay streams, rate-limit rejections, and per-replay-id breakdown. Auth via `X-Admin-Token` header matched against the `ADMIN_TOKEN` env var; unset → 503 ("admin disabled"). In-memory counters live on `app.state.stats` (restart wipes, matching the rest of the demo). 8 new tests; web suite now 21 tests in ~24s. See [LEARNINGS — Admin stats](LEARNINGS.md#admin-stats).
 
-A1, A2, A3, B1, B2, C4, D2 (CLI), and D2's web-replay toggle are done. Of what's left:
+---
 
-**If picking the demo-hardening angle (continued):** the `/admin/stats` endpoint (~1h) for a private monitoring view is the obvious next step. Adds today's session count + spend + replay-stream count, surfaceable to operator only.
+## Suggested ordering (updated post-/admin/stats)
+
+A1, A2, A3, B1, B2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
 
 **If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly".
 

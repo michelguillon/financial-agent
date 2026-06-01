@@ -7,6 +7,8 @@ everything (acceptable for an ephemeral demo).
 from __future__ import annotations
 
 import asyncio
+import hmac
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -36,12 +38,15 @@ from web.backend.limits import (  # noqa: E402
 )
 from web.backend.replays import get_replay, list_replays  # noqa: E402
 from web.backend.sessions import SessionManager  # noqa: E402
+from web.backend.stats import Stats  # noqa: E402
 from web.backend.streaming import (  # noqa: E402
     WebSseRenderer,
     format_sse,
     push_sentinel,
     stream_turn,
 )
+
+ADMIN_TOKEN_ENV = "ADMIN_TOKEN"
 
 # Replay pacing — server-side knob, exposed as ?delay=N on the stream route.
 DEFAULT_REPLAY_DELAY_SECONDS = 0.8
@@ -60,8 +65,10 @@ FRONTEND_DIST = PROJECT_ROOT / "web" / "frontend" / "dist"
 async def lifespan(app: FastAPI):
     sessions = SessionManager()
     rate_limiter = RateLimiter()
+    stats = Stats()
     app.state.sessions = sessions
     app.state.rate_limiter = rate_limiter
+    app.state.stats = stats
     # Pre-build the seed DB so the first user doesn't wait ~2s.
     await sessions._ensure_seed_db()
     sweeper_task = asyncio.create_task(sessions.run_sweeper())
@@ -139,11 +146,13 @@ def health(request: Request) -> dict:
 async def create_session(request: Request) -> CreateSessionResponse:
     sessions: SessionManager = request.app.state.sessions
     rate_limiter: RateLimiter = request.app.state.rate_limiter
+    stats: Stats = request.app.state.stats
 
     client_ip = get_client_ip(request)
     try:
         rate_limiter.check(client_ip)
     except RateLimitedError as e:
+        stats.record_rate_limit_rejection()
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limited: max {MAX_SESSIONS_PER_IP_PER_DAY} sessions per IP per day.",
@@ -152,6 +161,7 @@ async def create_session(request: Request) -> CreateSessionResponse:
 
     ws = await sessions.create(client_ip=client_ip)
     rate_limiter.record(client_ip)
+    stats.record_session_created()
 
     return CreateSessionResponse(
         session_id=ws.id,
@@ -175,6 +185,7 @@ def end_session(session_id: str, request: Request):
 @app.post("/api/sessions/{session_id}/turn")
 async def turn(session_id: str, body: TurnRequest, request: Request):
     sessions: SessionManager = request.app.state.sessions
+    stats: Stats = request.app.state.stats
     ws = sessions.get(session_id)
     if ws is None:
         raise HTTPException(
@@ -186,6 +197,7 @@ async def turn(session_id: str, body: TurnRequest, request: Request):
     try:
         check_budget(ws.agent_session.cost_usd)
     except BudgetExceededError as e:
+        stats.record_turn(kind="budget_blocked")
         # Capture values in locals — `except E as e` clears `e` after the
         # block exits, so the generator closure can't reference it directly.
         used = e.used
@@ -216,6 +228,7 @@ async def turn(session_id: str, body: TurnRequest, request: Request):
     # Run the agent loop in a worker thread. SESSION_DB_PATH is a ContextVar
     # which propagates across asyncio.to_thread automatically.
     SESSION_DB_PATH.set(ws.db_path)
+    cost_before = ws.agent_session.cost_usd
 
     def _runner() -> str:
         try:
@@ -235,9 +248,16 @@ async def turn(session_id: str, body: TurnRequest, request: Request):
         # actually available before turn.completed is emitted.
         try:
             final_text = await run_turn_task
+            failed = False
         except Exception:
             final_text = ""
+            failed = True
         ws.turn_count += 1
+        cost_delta = max(0.0, ws.agent_session.cost_usd - cost_before)
+        stats.record_turn(
+            kind="failed" if failed else "completed",
+            cost_delta_usd=cost_delta,
+        )
         yield format_sse("turn.completed", {
             "final_text": final_text,
             "cumulative_cost_usd": ws.agent_session.cost_usd,
@@ -259,7 +279,7 @@ def replays_catalogue() -> dict:
 
 
 @app.get("/api/replays/{replay_id}/stream")
-async def replay_stream(replay_id: str, delay: float = DEFAULT_REPLAY_DELAY_SECONDS):
+async def replay_stream(replay_id: str, request: Request, delay: float = DEFAULT_REPLAY_DELAY_SECONDS):
     """SSE stream that walks a bundled transcript through WebSseRenderer.
 
     Reuses `agent.replay.replay()` from D2 by running it in
@@ -274,6 +294,11 @@ async def replay_stream(replay_id: str, delay: float = DEFAULT_REPLAY_DELAY_SECO
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Replay {replay_id!r} not found.",
         )
+
+    # Count the stream start (post-404). Aborts and disconnects shouldn't
+    # undercount: "stream started" is the right granularity.
+    stats: Stats = request.app.state.stats
+    stats.record_replay_started(meta.id)
 
     # Clamp delay to a sane range; ?delay=0 is allowed (debug/instant).
     delay = max(0.0, min(MAX_REPLAY_DELAY_SECONDS, delay))
@@ -313,6 +338,46 @@ async def replay_stream(replay_id: str, delay: float = DEFAULT_REPLAY_DELAY_SECO
         yield format_sse("replay.completed", {"replay_id": meta.id})
 
     return _sse_response(event_stream())
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+def _require_admin(request: Request) -> None:
+    """Gate admin routes via the ADMIN_TOKEN env var.
+
+    - Env unset → 503 ("admin disabled"). Default posture in dev; the
+      endpoint is invisible until the operator opts in.
+    - Env set + header missing/wrong → 401.
+    Uses hmac.compare_digest for constant-time comparison.
+    """
+    expected = os.environ.get(ADMIN_TOKEN_ENV)
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Admin disabled. Set {ADMIN_TOKEN_ENV} to enable.",
+        )
+    provided = request.headers.get("x-admin-token", "")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-Admin-Token.",
+        )
+
+
+@app.get("/admin/stats")
+def admin_stats(request: Request) -> dict:
+    """Operator-only JSON snapshot of demo activity.
+
+    Counters live on `app.state.stats` (in-memory; restart wipes). See
+    web/backend/stats.py for the shape.
+    """
+    _require_admin(request)
+    stats: Stats = request.app.state.stats
+    sessions: SessionManager = request.app.state.sessions
+    rate_limiter: RateLimiter = request.app.state.rate_limiter
+    return stats.to_dict(sessions=sessions, rate_limiter=rate_limiter)
 
 
 def _sse_response(generator) -> StreamingResponse:

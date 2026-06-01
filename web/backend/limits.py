@@ -84,3 +84,20 @@ class RateLimiter:
         now = datetime.now(timezone.utc)
         self._prune(ip, now)
         return len(self._timestamps[ip])
+
+    def snapshot(self) -> dict:
+        """Aggregate counts across all known IPs for the current window.
+
+        Used by GET /admin/stats. Prunes each IP's deque first so stale
+        entries don't inflate today's numbers.
+        """
+        now = datetime.now(timezone.utc)
+        unique_ips = 0
+        events = 0
+        for ip in list(self._timestamps):
+            self._prune(ip, now)
+            n = len(self._timestamps[ip])
+            if n > 0:
+                unique_ips += 1
+                events += n
+        return {"unique_ips_today": unique_ips, "events_today": events}
