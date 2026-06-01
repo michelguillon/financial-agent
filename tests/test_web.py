@@ -189,3 +189,81 @@ def test_per_session_db_paths_are_distinct(client: TestClient):
     # And both seeded from the shared seed.db.
     assert sessions._seed_db_path is not None
     assert sessions._seed_db_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# D2 follow-up: web replay toggle
+# ---------------------------------------------------------------------------
+
+def _read_sse_events(text: str) -> list[dict]:
+    """Parse a complete SSE stream into [{type, data}, ...]."""
+    events: list[dict] = []
+    for raw in text.split("\n\n"):
+        if not raw.strip():
+            continue
+        event_name, data_json = "", ""
+        for line in raw.split("\n"):
+            if line.startswith("event:"):
+                event_name = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data_json += line[len("data:"):].strip()
+        if event_name:
+            events.append({"type": event_name, "data": json.loads(data_json) if data_json else {}})
+    return events
+
+
+def test_replays_catalogue_lists_demo(client: TestClient):
+    r = client.get("/api/replays")
+    assert r.status_code == 200
+    payload = r.json()
+    assert "replays" in payload
+    ids = {entry["id"] for entry in payload["replays"]}
+    assert "demo_3turn" in ids
+    # Shape check: each entry has the keys the React side needs.
+    for entry in payload["replays"]:
+        assert {"id", "title", "summary"} <= set(entry.keys())
+
+
+def test_replay_stream_404_on_unknown_id(client: TestClient):
+    r = client.get("/api/replays/does_not_exist/stream?delay=0")
+    assert r.status_code == 404
+
+
+def test_replay_stream_emits_expected_event_types(client: TestClient):
+    r = client.get("/api/replays/demo_3turn/stream?delay=0")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    events = _read_sse_events(r.text)
+    types = [e["type"] for e in events]
+    # Opening + closing markers.
+    assert types[0] == "replay.info"
+    assert types[-1] == "replay.completed"
+    # The bundled 3-turn demo must surface each block category at least once.
+    assert "user_text" in types
+    assert "tool_call" in types
+    assert "tool_result" in types
+    assert "assistant_text" in types
+    assert "usage" in types
+
+    # First user_text matches the canned demo's opening prompt.
+    first_user = next(e for e in events if e["type"] == "user_text")
+    assert "spending" in first_user["data"]["text"].lower()
+
+
+def test_replay_stream_clamps_delay(client: TestClient):
+    # delay=99 must clamp to MAX_REPLAY_DELAY_SECONDS = 5; we don't measure
+    # wall clock — we assert the replay.info event reports the clamped value.
+    r = client.get("/api/replays/demo_3turn/stream?delay=99")
+    assert r.status_code == 200
+    events = _read_sse_events(r.text)
+    info = next(e for e in events if e["type"] == "replay.info")
+    assert info["data"]["delay_seconds"] == app_module.MAX_REPLAY_DELAY_SECONDS
+
+
+def test_replay_bypasses_rate_limit_and_session(client: TestClient):
+    # No session created — replay should not require one.
+    for _ in range(5):  # exceed the 3/day session rate limit
+        r = client.get("/api/replays/demo_3turn/stream?delay=0")
+        assert r.status_code == 200, (
+            f"replay stream should be free of rate-limit gating, got {r.status_code}"
+        )

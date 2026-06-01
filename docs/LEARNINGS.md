@@ -1500,3 +1500,108 @@ to defer until someone asks for it.
 D2 edit: ~1.5 hours of model time, $0 in API costs (no LLM calls
 involved). 11 deterministic tests added, full pytest suite now sits
 at 100 tests in ~63s.
+
+---
+
+## D2 follow-up — web replay toggle
+
+### Goal
+
+Surface D2's replay capability through the existing web UI so recruiters
+landing on the demo URL can watch a canned conversation without burning
+their $0.50 budget. The user explicitly chose a Live/Replay toggle
+inline in the header rather than a separate URL ("might not be easily
+found") — a UX call that turned out to dovetail nicely with the
+implementation: one app, one tab, the existing chat surface re-used.
+
+### What shipped
+
+Two backend routes, a curated transcript bundled into the image, and a
+segmented toggle in the React header. Both forks were resolved by the
+user upfront: one curated demo (not a picker), paced ~0.8s/turn by
+default (not instant).
+
+The backend is ~60 lines added to `web/backend/app.py` plus a tiny
+`web/backend/replays.py` catalogue dict. Both routes — `GET /api/replays`
+and `GET /api/replays/{id}/stream?delay=N` — bypass session creation,
+the per-IP rate limit, and the cost cap. They run `agent.replay.replay()`
+(from D2) in `asyncio.to_thread`, feeding events through the existing
+`WebSseRenderer`. The renderer's `show_user_text` hook, added in D2's
+protocol extension, gets exercised for the first time on this path.
+
+The frontend is mostly state plumbing: a `mode: 'live' | 'replay'`
+discriminator, a `streamReplay()` sibling for the existing `streamTurn()`
+SSE consumer, and three new event types in the discriminated union
+(`replay.info`, `user_text`, `replay.completed`). The Live/Replay
+segmented control lives in a small extracted `Header.tsx` so `App.tsx`
+stays state-focused.
+
+### Methodology that worked
+
+**The protocol-first decision in D2 paid off here.** D2 added
+`show_user_text` to the Renderer Protocol "to keep parity, even though
+no current renderer calls it." That hook is exactly what the web
+replay needed for the user prompts to render. Zero refactoring of D2
+code was needed — the web path is just `replay(path, WebSseRenderer(...))`.
+Designing for the next consumer one task in advance turned a half-day
+of plumbing into ~3h of writing routes + UI.
+
+**Bypass the safety machinery deliberately and document why.** Replay
+is a public read of bundled content with no API cost. Routing it
+through the live-session machinery (creating a DB copy, decrementing
+the rate limit, checking budget) would be honest-but-pointless overhead.
+The two replay routes intentionally skip all of that and the test
+`test_replay_bypasses_rate_limit_and_session` codifies the choice so
+a future refactor can't silently reintroduce gating.
+
+**A Python dict beats a manifest.json for one entry.** The catalogue
+sits in `web/backend/replays.py` as a `dict[str, ReplayMeta]`. Adding
+more entries is a code change going through the same review as
+everything else. When it grows past ~3 entries, swap to JSON; for now,
+co-located metadata + path + validation is the right shape.
+
+### Surprises
+
+**Existing `stream_turn` was 95% generic.** The only thing tying it
+to the live path was a hard-coded `"where": "run_turn"` label on its
+error event. Adding a keyword-only `error_where` parameter took one
+line and let the replay route reuse the function as-is. Always read
+the existing utility before writing a sibling.
+
+**The agent image's `replay()` couldn't find the bundled jsonl on
+first try.** `Dockerfile.web` had `COPY web/backend/` but not
+`COPY web/replays/`. The CLI sanity check (`python -m agent.replay
+web/replays/demo_3turn.jsonl`) caught it before the web build, because
+the agent image goes through its own Dockerfile that also needed the
+file. Lesson restated: when bundling new content, audit every
+Dockerfile that touches the path.
+
+**TestClient's SSE handling reads to completion synchronously.**
+`client.get("/api/replays/.../stream?delay=0")` returns once the entire
+stream is done — including the `replay.completed` event — and exposes
+the full body via `.text`. That made the SSE-parser test (`_read_sse_events`)
+a one-shot string split, no async generator needed. Pleasant.
+
+### Decisions I'd revisit
+
+**No client-visible speed control.** The server enforces `?delay=N`
+with a hard cap of 5s, but the user can't change it from the UI.
+Adding 1x/2x/instant buttons next to the toggle is ~30 minutes of work
+when someone asks; today, the default 0.8s is fine.
+
+**The cost numbers from the original recording show up in the
+replay's `usage` events.** Recruiters watching the replay see "$0.011"
+flash by per turn. That's informative — the agent IS this cheap to
+run — but if it ever becomes off-putting, the SSE runner can drop
+`usage` events on the replay path. Not flagged as today's problem.
+
+**No usage stats on replays.** Replays bypass the rate limiter and
+don't increment a counter; we have no idea how many recruiters
+actually click the toggle. The `/admin/stats` endpoint from the
+demo-hardening backlog would close this gap.
+
+### Cost
+
+D2-followup edit: ~1.5 hours of model time. Zero API costs. 5 new web
+tests added; the full web suite is now 13 tests in ~21s, the
+agent-side full suite is unchanged at 100 in ~63s.

@@ -82,9 +82,12 @@ Shipped: FastAPI + React + Vite + Tailwind, single multi-stage Docker image. Per
 ### ~~D2 — Transcript replay tool~~ ✓ Done (2026-06-01)
 Shipped: [agent/replay.py](../agent/replay.py) reads a `logs/<ts>.jsonl` and re-emits each event through the Renderer protocol. CLI entry `python -m agent.replay <path>` with `--delay-seconds` (pacing for live demos), `--no-log-header`, and `--silent` (scripting-friendly one-line summary). Required a one-method extension to the Renderer protocol — `show_user_text` — implemented on all three renderers (RichRenderer, SilentRenderer, WebSseRenderer) so a future web-replay endpoint can stack cleanly. 11 deterministic tests + a real-transcript smoke check. See [LEARNINGS — D2 — transcript replay](LEARNINGS.md#d2--transcript-replay).
 
+### ~~D2 follow-up — Web replay toggle~~ ✓ Done (2026-06-01)
+Shipped: a Live/Replay segmented toggle in the web UI header that flips to a paced playback of a curated transcript bundled into the image at [web/replays/demo_3turn.jsonl](../web/replays/demo_3turn.jsonl). Backend reuses `agent.replay.replay()` + `WebSseRenderer` — no new streaming code, just two thin routes (`GET /api/replays`, `GET /api/replays/{id}/stream?delay=N`) running the replay in `asyncio.to_thread`. Replay bypasses the cost cap, session DB, and per-IP rate limit by design (it's a public read of bundled content). 5 new web tests. See [LEARNINGS — D2 follow-up](LEARNINGS.md#d2-follow-up--web-replay-toggle).
+
 **Residual / natural follow-ups:**
-- **Web replay endpoint** (`/api/replay/<id>` SSE stream + React Replay tab) — recruiter-watch-canned-demo angle. WebSseRenderer already has the `user_text` event hook ready.
-- **HTML export** (`--html out.html`) — single self-contained file for email/share.
+- **Multi-demo picker** — the catalogue is a Python dict keyed by id; adding more entries is a content change. UI picker would slot in next to the toggle.
+- **HTML export** (`--html out.html`) — single self-contained file for email/share. Separate path from the web toggle.
 
 ### D3 — "Resume conversation" UX
 **What.** New `--resume <session_id>` flag on `python -m agent` that loads the last messages array from a transcript and continues the session. SPEC §3.1 ("session memory dies with the session") was a deliberate Phase 1 choice — Phase 2 can revisit if it actually feels limiting in use.
@@ -93,11 +96,11 @@ Shipped: [agent/replay.py](../agent/replay.py) reads a `logs/<ts>.jsonl` and re-
 
 ---
 
-## Suggested ordering (updated post-D2)
+## Suggested ordering (updated post-D2 web replay)
 
-A1, A2, A3, B1, B2, C4, and D2 are done. Of what's left:
+A1, A2, A3, B1, B2, C4, D2 (CLI), and D2's web-replay toggle are done. Of what's left:
 
-**If picking the demo-hardening angle (continued from B1 + D2):** the `/admin/stats` endpoint (~1h) for a private monitoring view, then D2's web-replay endpoint (~half-day) to surface canned conversations through the browser without spending a recruiter's budget.
+**If picking the demo-hardening angle (continued):** the `/admin/stats` endpoint (~1h) for a private monitoring view is the obvious next step. Adds today's session count + spend + replay-stream count, surfaceable to operator only.
 
 **If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly".
 

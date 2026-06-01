@@ -29,6 +29,7 @@ COPY classifier/ ./classifier/
 COPY db/ ./db/
 COPY data/synthetic/ ./data/synthetic/
 COPY web/backend/ ./web/backend/
+COPY web/replays/ ./web/replays/
 COPY tests/ ./tests/
 COPY pytest.ini ./
 

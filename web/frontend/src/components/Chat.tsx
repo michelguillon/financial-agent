@@ -9,6 +9,7 @@ interface Props {
   onSend: (text: string) => void;
   disabled?: boolean;
   disabledReason?: string;
+  hideSamples?: boolean;
 }
 
 const SAMPLE_PROMPTS = [
@@ -17,7 +18,7 @@ const SAMPLE_PROMPTS = [
   'Show me 3 unclassified transactions and suggest categories.',
 ];
 
-export function Chat({ items, isStreaming, onSend, disabled, disabledReason }: Props) {
+export function Chat({ items, isStreaming, onSend, disabled, disabledReason, hideSamples }: Props) {
   const [draft, setDraft] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -39,7 +40,7 @@ export function Chat({ items, isStreaming, onSend, disabled, disabledReason }: P
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         <div className="mx-auto max-w-3xl space-y-3">
-          {items.length === 0 && <EmptyState onPick={onSend} />}
+          {items.length === 0 && !hideSamples && <EmptyState onPick={onSend} />}
           {items.map((item) => (
             <ChatItemRow key={item.id} item={item} />
           ))}

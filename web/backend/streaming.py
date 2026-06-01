@@ -93,11 +93,14 @@ def format_sse(event_type: str, data: dict) -> str:
 async def stream_turn(
     queue: asyncio.Queue,
     run_turn_future: asyncio.Future,
+    *,
+    error_where: str = "run_turn",
 ):
     """Async generator: drains `queue` until SENTINEL, yields SSE strings.
 
     Also catches exceptions from `run_turn_future` and emits an `error`
-    event so the browser sees a reason if the turn died mid-flight.
+    event so the browser sees a reason if the producer died mid-flight.
+    `error_where` lets the replay path label its errors honestly.
     """
     while True:
         item = await queue.get()
@@ -106,11 +109,11 @@ async def stream_turn(
         if isinstance(item, dict):
             yield format_sse(item["type"], item["data"])
 
-    # If run_turn raised, surface it as a final error event.
+    # If the producer raised, surface it as a final error event.
     if run_turn_future.done():
         exc = run_turn_future.exception()
         if exc is not None:
-            yield format_sse("error", {"where": "run_turn", "detail": str(exc)})
+            yield format_sse("error", {"where": error_where, "detail": str(exc)})
 
 
 def push_sentinel(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> None:

@@ -82,6 +82,8 @@ Guardrails baked in:
 - **Per-session cost cap** ([web/backend/limits.py](web/backend/limits.py)) — $0.50, checked before every turn so an over-budget request never spends.
 - **Per-IP rate limit** — 3 sessions / 24h, in-memory.
 
+The header has a Live/Replay toggle. Replay mode streams a curated transcript from [web/replays/](web/replays/) through the existing `WebSseRenderer` event protocol — so recruiters can watch a canned demo without spending their budget. Replay routes (`GET /api/replays`, `GET /api/replays/{id}/stream`) deliberately bypass the cost cap, session DB, and rate limit (they're a public read of bundled content with no API call). To add another canned demo: drop a JSONL into `web/replays/` and add an entry to `REPLAY_CATALOGUE` in [web/backend/replays.py](web/backend/replays.py).
+
 Reset the in-memory rate-limit counter in dev: restart the container (`docker compose ... restart web`). State is process-local.
 
 The demo runs synthetic-data-only forever — real-data ingestion via the web is explicitly out of scope.

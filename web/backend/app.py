@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from agent.agent import run_turn  # noqa: E402
+from agent.replay import replay as replay_transcript  # noqa: E402
 from db.database import SESSION_DB_PATH  # noqa: E402
 
 from web.backend.limits import (  # noqa: E402
@@ -33,6 +34,7 @@ from web.backend.limits import (  # noqa: E402
     budget_remaining,
     check_budget,
 )
+from web.backend.replays import get_replay, list_replays  # noqa: E402
 from web.backend.sessions import SessionManager  # noqa: E402
 from web.backend.streaming import (  # noqa: E402
     WebSseRenderer,
@@ -40,6 +42,10 @@ from web.backend.streaming import (  # noqa: E402
     push_sentinel,
     stream_turn,
 )
+
+# Replay pacing — server-side knob, exposed as ?delay=N on the stream route.
+DEFAULT_REPLAY_DELAY_SECONDS = 0.8
+MAX_REPLAY_DELAY_SECONDS = 5.0
 
 # Static bundle from the Vite build. Optional at dev time — the FastAPI
 # app still serves the API even if the frontend hasn't been built yet.
@@ -238,6 +244,73 @@ async def turn(session_id: str, body: TurnRequest, request: Request):
             "budget_remaining_usd": budget_remaining(ws.agent_session.cost_usd),
             "turns_so_far": ws.agent_session.turn_count,
         })
+
+    return _sse_response(event_stream())
+
+
+@app.get("/api/replays")
+def replays_catalogue() -> dict:
+    """List the curated transcripts available for the Live/Replay toggle.
+
+    No auth, no rate limit, no session — replay is a public read of bundled
+    content and bypasses the cost/rate-limit guards by design.
+    """
+    return {"replays": list_replays()}
+
+
+@app.get("/api/replays/{replay_id}/stream")
+async def replay_stream(replay_id: str, delay: float = DEFAULT_REPLAY_DELAY_SECONDS):
+    """SSE stream that walks a bundled transcript through WebSseRenderer.
+
+    Reuses `agent.replay.replay()` from D2 by running it in
+    `asyncio.to_thread` — same async-sync bridge the live /turn route
+    uses for `run_turn`. The renderer's `show_user_text` callback (added
+    when D2 extended the Renderer protocol) emits `user_text` SSE events
+    so the browser can render the original user prompts.
+    """
+    meta = get_replay(replay_id)
+    if meta is None or not meta.path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Replay {replay_id!r} not found.",
+        )
+
+    # Clamp delay to a sane range; ?delay=0 is allowed (debug/instant).
+    delay = max(0.0, min(MAX_REPLAY_DELAY_SECONDS, delay))
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    renderer = WebSseRenderer(queue=queue, loop=loop)
+
+    # Opening event with the metadata the React side needs to label the stream.
+    await queue.put({
+        "type": "replay.info",
+        "data": {
+            "replay_id": meta.id,
+            "title": meta.title,
+            "summary": meta.summary,
+            "delay_seconds": delay,
+        },
+    })
+
+    def _runner() -> None:
+        try:
+            replay_transcript(
+                meta.path, renderer,
+                delay_seconds=delay,
+                show_header=False,  # the header is `replay.info` above
+            )
+        finally:
+            push_sentinel(queue, loop)
+
+    replay_task = asyncio.create_task(asyncio.to_thread(_runner))
+
+    async def event_stream():
+        async for sse_chunk in stream_turn(queue, replay_task, error_where="replay"):
+            yield sse_chunk
+        # Mirror /turn's turn.completed — gives the React side a clean
+        # signal to drop the streaming spinner.
+        yield format_sse("replay.completed", {"replay_id": meta.id})
 
     return _sse_response(event_stream())
 

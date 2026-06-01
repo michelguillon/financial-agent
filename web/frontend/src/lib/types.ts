@@ -7,16 +7,28 @@ export interface SessionInfo {
   sessions_remaining_today: number;
 }
 
-// Discriminated union of SSE events the backend can emit during a turn.
+// Discriminated union of SSE events the backend can emit during a turn or replay.
 export type AgentEvent =
   | { type: 'session.info';     data: { session_id: string; budget_total_usd: number; budget_used_usd: number; turns_so_far: number } }
   | { type: 'tool_call';        data: { name: string; input: Record<string, unknown> } }
   | { type: 'tool_result';      data: { name: string; result: string; is_error: boolean } }
   | { type: 'assistant_text';   data: { text: string } }
+  | { type: 'user_text';        data: { text: string } }
   | { type: 'usage';            data: { input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number; cost_usd: number; turn: number } }
   | { type: 'error';            data: { where: string; detail: string } }
   | { type: 'turn.completed';   data: { final_text: string; cumulative_cost_usd: number; budget_remaining_usd: number; turns_so_far: number } }
-  | { type: 'budget.exceeded';  data: { used_usd: number; budget_usd: number } };
+  | { type: 'budget.exceeded';  data: { used_usd: number; budget_usd: number } }
+  | { type: 'replay.info';      data: { replay_id: string; title: string; summary: string; delay_seconds: number } }
+  | { type: 'replay.completed'; data: { replay_id: string } };
+
+// Replay catalogue entry returned by GET /api/replays.
+export interface ReplayMeta {
+  id: string;
+  title: string;
+  summary: string;
+}
+
+export type Mode = 'live' | 'replay';
 
 // Items rendered in the chat scroll area.
 export type ChatItem =

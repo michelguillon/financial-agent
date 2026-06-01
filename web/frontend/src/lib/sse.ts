@@ -1,5 +1,7 @@
 // Browser EventSource only supports GET. For POST + SSE we use fetch()
 // with a streaming body reader and parse the SSE wire format manually.
+// The replay path also uses fetch (despite being GET) so the abort-signal
+// plumbing matches.
 
 import type { AgentEvent } from './types';
 
@@ -14,9 +16,28 @@ export async function* streamTurn(
     body: JSON.stringify({ user_text: userText }),
     signal,
   });
+  yield* drainSseResponse(response, 'Turn request');
+}
 
+export async function* streamReplay(
+  replayId: string,
+  delaySeconds: number | undefined,
+  signal: AbortSignal,
+): AsyncGenerator<AgentEvent> {
+  const qs = delaySeconds === undefined ? '' : `?delay=${delaySeconds}`;
+  const response = await fetch(`/api/replays/${replayId}/stream${qs}`, {
+    method: 'GET',
+    signal,
+  });
+  yield* drainSseResponse(response, 'Replay request');
+}
+
+async function* drainSseResponse(
+  response: Response,
+  what: string,
+): AsyncGenerator<AgentEvent> {
   if (!response.ok || !response.body) {
-    throw new Error(`Turn request failed: ${response.status} ${response.statusText}`);
+    throw new Error(`${what} failed: ${response.status} ${response.statusText}`);
   }
 
   const reader = response.body.getReader();

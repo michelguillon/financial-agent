@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BudgetBar } from './components/BudgetBar';
 import { Chat } from './components/Chat';
-import { streamTurn } from './lib/sse';
-import type { AgentEvent, ChatItem, SessionInfo } from './lib/types';
+import { Header } from './components/Header';
+import { streamReplay, streamTurn } from './lib/sse';
+import type { AgentEvent, ChatItem, Mode, ReplayMeta, SessionInfo } from './lib/types';
 
 export default function App() {
+  const [mode, setMode] = useState<Mode>('live');
   const [session, setSession] = useState<SessionInfo | null>(null);
+  const [replayMeta, setReplayMeta] = useState<ReplayMeta | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +19,7 @@ export default function App() {
 
   const newId = () => `item-${nextId.current++}`;
 
-  // Bootstrap a session on first mount (StrictMode-safe via ref guard).
+  // Bootstrap a live session on first mount (StrictMode-safe via ref guard).
   useEffect(() => {
     if (startOnceRef.current) return;
     startOnceRef.current = true;
@@ -55,13 +58,12 @@ export default function App() {
   }, [session, startSession]);
 
   const sendTurn = useCallback(async (userText: string) => {
-    if (!session || isStreaming || budgetExceeded) return;
+    if (!session || isStreaming || budgetExceeded || mode !== 'live') return;
     setItems((cur) => [...cur, { kind: 'user', text: userText, id: newId() }]);
     setIsStreaming(true);
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Pending tool calls keyed by name (so we can fill in their result when it arrives).
     const pendingTools: ChatItem[] = [];
 
     try {
@@ -74,7 +76,68 @@ export default function App() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [session, isStreaming, budgetExceeded]);
+  }, [session, isStreaming, budgetExceeded, mode]);
+
+  const startReplay = useCallback(async () => {
+    setError(null);
+    setItems([]);
+
+    // Pick the first available replay. Today there's only one, but the
+    // endpoint is shaped to support more.
+    let replays: ReplayMeta[] = [];
+    try {
+      const r = await fetch('/api/replays');
+      if (!r.ok) {
+        setError(`Couldn't load replay catalogue (${r.status}).`);
+        return;
+      }
+      replays = (await r.json()).replays;
+    } catch (e) {
+      setError(`Network error loading catalogue: ${(e as Error).message}`);
+      return;
+    }
+    if (!replays.length) {
+      setError('No replays available.');
+      return;
+    }
+    const target = replays[0];
+    setReplayMeta(target);
+
+    setIsStreaming(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const pendingTools: ChatItem[] = [];
+    try {
+      for await (const event of streamReplay(target.id, undefined, controller.signal)) {
+        applyEvent(event, pendingTools);
+      }
+    } catch (e) {
+      // AbortError is expected when the user toggles back to Live mid-stream.
+      const name = (e as Error).name;
+      if (name !== 'AbortError') {
+        setItems((cur) => [...cur, { kind: 'notice', level: 'error', text: `Replay error: ${(e as Error).message}`, id: newId() }]);
+      }
+    } finally {
+      setIsStreaming(false);
+      abortRef.current = null;
+    }
+  }, []);
+
+  const switchMode = useCallback(async (next: Mode) => {
+    if (next === mode || isStreaming) return;
+    // Abort whatever is currently streaming.
+    abortRef.current?.abort();
+    setMode(next);
+    setItems([]);
+    setReplayMeta(null);
+
+    if (next === 'replay') {
+      void startReplay();
+    } else {
+      // Going back to Live — make sure a session exists.
+      if (!session) await startSession();
+    }
+  }, [mode, isStreaming, session, startReplay, startSession]);
 
   function applyEvent(event: AgentEvent, pending: ChatItem[]) {
     switch (event.type) {
@@ -84,6 +147,24 @@ export default function App() {
           budget_used_usd: event.data.budget_used_usd,
           turns_so_far: event.data.turns_so_far,
         });
+        return;
+
+      case 'replay.info':
+        setReplayMeta({
+          id: event.data.replay_id,
+          title: event.data.title,
+          summary: event.data.summary,
+        });
+        setItems((cur) => [...cur, {
+          kind: 'notice',
+          level: 'info',
+          text: `Canned demo: ${event.data.title}`,
+          id: newId(),
+        }]);
+        return;
+
+      case 'user_text':
+        setItems((cur) => [...cur, { kind: 'user', text: event.data.text, id: newId() }]);
         return;
 
       case 'tool_call': {
@@ -99,7 +180,6 @@ export default function App() {
       }
 
       case 'tool_result': {
-        // Pair with the most recent unresolved tool_call with the same name.
         const idx = [...pending].reverse().findIndex(
           (t) => t.kind === 'tool' && t.name === event.data.name && t.result === undefined,
         );
@@ -117,7 +197,6 @@ export default function App() {
         return;
 
       case 'usage':
-        // Per-iteration usage; the cumulative number arrives in turn.completed.
         return;
 
       case 'error':
@@ -130,6 +209,11 @@ export default function App() {
           budget_used_usd: event.data.cumulative_cost_usd,
           turns_so_far: event.data.turns_so_far,
         });
+        return;
+
+      case 'replay.completed':
+        // Stream-end marker; the for-await loop exits naturally and
+        // setIsStreaming(false) runs in the `finally`.
         return;
 
       case 'budget.exceeded':
@@ -146,16 +230,13 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <div>
-            <h1 className="text-base font-semibold text-slate-900">Personal finance agent</h1>
-            <p className="text-xs text-slate-500">Sonnet 4.6 + Haiku 4.5 · synthetic UK data · <a href="https://github.com/michelguillon/financial-agent" target="_blank" rel="noreferrer" className="underline hover:text-slate-700">source</a></p>
-          </div>
-        </div>
-      </header>
+      <Header
+        mode={mode}
+        onModeChange={switchMode}
+        disabled={isStreaming}
+      />
 
-      {session && (
+      {mode === 'live' && session && (
         <BudgetBar
           used={session.budget_used_usd}
           total={session.budget_total_usd}
@@ -164,25 +245,43 @@ export default function App() {
         />
       )}
 
+      {mode === 'replay' && replayMeta && (
+        <div className="border-b border-slate-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 sm:px-6">
+          <div className="mx-auto max-w-3xl">
+            <span className="font-semibold">Replay mode</span> · {replayMeta.title} · {replayMeta.summary}
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 overflow-hidden">
         {error ? (
           <div className="flex h-full items-center justify-center p-6">
             <div className="max-w-md rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-900">
               {error}
-              <button onClick={startSession} className="mt-3 block rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-red-100">
+              <button
+                onClick={mode === 'live' ? startSession : startReplay}
+                className="mt-3 block rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-red-100"
+              >
                 Try again
               </button>
             </div>
           </div>
-        ) : !session ? (
+        ) : mode === 'live' && !session ? (
           <div className="flex h-full items-center justify-center text-sm text-slate-500">Starting session…</div>
         ) : (
           <Chat
             items={items}
             isStreaming={isStreaming}
             onSend={sendTurn}
-            disabled={budgetExceeded}
-            disabledReason={budgetExceeded ? 'Budget reached. Reset to start a fresh demo session.' : undefined}
+            disabled={mode === 'replay' || budgetExceeded}
+            disabledReason={
+              mode === 'replay'
+                ? 'Watching a canned demo — switch to Live to chat.'
+                : budgetExceeded
+                  ? 'Budget reached. Reset to start a fresh demo session.'
+                  : undefined
+            }
+            hideSamples={mode === 'replay'}
           />
         )}
       </main>
