@@ -1391,3 +1391,112 @@ workload — most apply_* approvals are clean "yes" replies caught by
 regex — so fallback fires <10% of the time. End-to-end test suite
 adds one `@pytest.mark.llm` test at ~$0.001/run, well under the
 project's existing $0.10/run budget for the LLM suite.
+
+---
+
+## D2 — transcript replay
+
+### Goal
+
+Make recorded sessions watchable. The agent already logs one JSONL file
+per session (`logs/<ISO>.jsonl`) with every event needed to reconstruct
+the conversation. What was missing was a reader. Two use cases drove
+the work: a debug asset (step through any past session that surprised
+us) and a future demo asset (let recruiters watch a canned
+conversation without spending their $0.50 budget).
+
+### What shipped
+
+`agent/replay.py` walks the JSONL and dispatches each record to a
+Renderer via the existing protocol — no new I/O paths, no new
+formatting code. Running `python -m agent.replay logs/<ts>.jsonl`
+re-prints the recorded conversation through RichRenderer; the output
+is visually equivalent to the live REPL, which is exactly what we
+want.
+
+Three CLI knobs: `--delay-seconds N` sleeps N seconds after each
+turn's usage record so the replay feels like a live session (handy
+for demos); `--no-log-header` strips the session-start/end banner
+lines; `--silent` swaps in `SilentRenderer` and emits one ASCII line
+of summary stats for scripting use.
+
+The replay loop is intentionally tolerant of schema drift. Unknown
+record types log a warning to stderr and continue. Missing
+content blocks (no `text`/`tool_use`) are skipped silently. The real
+transcripts under `logs/` contain pre-A3 records with slightly
+different shapes, and the test suite includes a smoke check that
+loads the most recent real log through SilentRenderer end-to-end so
+we don't quietly break old transcripts when the schema evolves.
+
+### Methodology that worked
+
+**Reuse the Renderer protocol instead of inventing one.** The agent
+loop already abstracts display behind a Protocol with five methods
+(`show_tool_call`, `show_tool_result`, `show_assistant_text`,
+`show_usage`, `show_error`). The web SSE renderer and the test
+SilentRenderer both implement it. Replay only needed one more verb —
+`show_user_text` — because the live REPL gets user input from
+`renderer.prompt()` and never has to render it back. Adding the
+method to all three implementations (Rich, Silent, WebSse) was four
+lines per renderer plus one Protocol entry. Everything else flowed
+through the existing channel.
+
+**Stats are recomputed, not stored.** The transcript records each
+turn's usage individually; there's no aggregate row. The replay loop
+keeps a small dataclass and sums as it walks. Means a partial
+transcript (Ctrl+C mid-session) still produces accurate totals up to
+the cutoff, which would not be true if we relied on a final
+summary line.
+
+**Tests use a recording fake renderer.** `RecordingRenderer` captures
+every call as a `(method_name, args, kwargs)` tuple. Assertions then
+check the call sequence and arguments against a hand-built
+transcript fixture. Cleaner than monkey-patching the real renderer
+and avoids any dependency on Rich's terminal output.
+
+### Surprises
+
+**`--silent` had a leak.** First implementation passed
+`show_header=not args.no_log_header` to `replay()` regardless of
+`--silent`. The `_print_header` fallback (for renderers without a
+`console` attribute) used plain `print()`, so the session-start /
+session-end banner lines still made it to stdout in silent mode.
+Caught by re-running the eyeball check after wiring up `--silent`
+(test as written passed because it only asserted "summary line is in
+output", not "summary line is the only line"). Fixed by hard-coding
+`show_header = False` when `--silent` is set, and tightening the
+test to assert exactly one non-blank output line.
+
+**Lesson:** assertions that say "X appears in the output" are weaker
+than they look. For CLI tools where stdout cleanliness matters,
+prefer "output equals X" or "exactly N lines of output".
+
+**Old transcripts work fine through the new renderer.** Pre-A3
+sessions don't have `apply_taxonomy_extension` records, and pre-A2
+sessions don't have the `category_sub2` field. The replay loop fell
+through to the JSON-fallback formatter in `RichRenderer._summarise_result`
+gracefully — no test rewrites needed, no special-casing on schema
+version.
+
+### Decisions I'd revisit
+
+**The web-replay endpoint is the next obvious step.** The
+WebSseRenderer already has a `user_text` event hook ready. A
+`/api/replay/<id>` SSE stream that drains a transcript through
+WebSseRenderer would let recruiters watch a canned conversation in
+the browser — the original motivation for D2 from the C4 follow-ups
+list. Deferred from this scope because plumbing the React side adds
+another half-day; the CLI tool is enough by itself for the debug
+use case and for live demos via screen share.
+
+**No pause-on-user-input mode.** A real demo might want the replay
+to pause when it encounters a `user` record and wait for a keypress
+(or for the user to type the next message themselves). That's
+closer to "interactive transcript walkthrough" than "replay" — fine
+to defer until someone asks for it.
+
+### Cost
+
+D2 edit: ~1.5 hours of model time, $0 in API costs (no LLM calls
+involved). 11 deterministic tests added, full pytest suite now sits
+at 100 tests in ~63s.

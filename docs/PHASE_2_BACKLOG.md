@@ -79,10 +79,12 @@ Shipped: FastAPI + React + Vite + Tailwind, single multi-stage Docker image. Per
 **Why.** Mixing currencies in the same view is a small but real mental tax noted in the Step 5 LEARNINGS open items.
 **Scope.** 30 minutes. Mostly a decision; the code change is one line in `agent/cli.py`.
 
-### D2 — Transcript replay tool
-**What.** `python -m agent.replay logs/<timestamp>.jsonl` — reads a transcript and re-renders it through the RichRenderer as if the conversation were happening now. Useful for sharing/reviewing past sessions without re-running them.
-**Why.** Demo asset (record once, replay deterministically) + debugging tool. The transcript already contains everything needed; just need a reader.
-**Scope.** 2 hours. New `agent/replay.py` module + an entry in `__main__.py` or a separate one.
+### ~~D2 — Transcript replay tool~~ ✓ Done (2026-06-01)
+Shipped: [agent/replay.py](../agent/replay.py) reads a `logs/<ts>.jsonl` and re-emits each event through the Renderer protocol. CLI entry `python -m agent.replay <path>` with `--delay-seconds` (pacing for live demos), `--no-log-header`, and `--silent` (scripting-friendly one-line summary). Required a one-method extension to the Renderer protocol — `show_user_text` — implemented on all three renderers (RichRenderer, SilentRenderer, WebSseRenderer) so a future web-replay endpoint can stack cleanly. 11 deterministic tests + a real-transcript smoke check. See [LEARNINGS — D2 — transcript replay](LEARNINGS.md#d2--transcript-replay).
+
+**Residual / natural follow-ups:**
+- **Web replay endpoint** (`/api/replay/<id>` SSE stream + React Replay tab) — recruiter-watch-canned-demo angle. WebSseRenderer already has the `user_text` event hook ready.
+- **HTML export** (`--html out.html`) — single self-contained file for email/share.
 
 ### D3 — "Resume conversation" UX
 **What.** New `--resume <session_id>` flag on `python -m agent` that loads the last messages array from a transcript and continues the session. SPEC §3.1 ("session memory dies with the session") was a deliberate Phase 1 choice — Phase 2 can revisit if it actually feels limiting in use.
@@ -91,11 +93,11 @@ Shipped: FastAPI + React + Vite + Tailwind, single multi-stage Docker image. Per
 
 ---
 
-## Suggested ordering (updated post-B1)
+## Suggested ordering (updated post-D2)
 
-A1, A2, A3, B1, B2, and C4 are done. Of what's left:
+A1, A2, A3, B1, B2, C4, and D2 are done. Of what's left:
 
-**If picking the demo-hardening angle (continued from B1):** D2 (transcript replay) + a tiny `/admin/stats` endpoint. ~2-3h total. D2 lets recruiters watch a canned conversation without burning their $0.50 budget; stats give you a private monitoring view.
+**If picking the demo-hardening angle (continued from B1 + D2):** the `/admin/stats` endpoint (~1h) for a private monitoring view, then D2's web-replay endpoint (~half-day) to surface canned conversations through the browser without spending a recruiter's budget.
 
 **If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly".
 

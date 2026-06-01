@@ -55,6 +55,12 @@ class WebSseRenderer:
     def show_assistant_text(self, text: str) -> None:
         self._put("assistant_text", text=text)
 
+    def show_user_text(self, text: str) -> None:
+        # Unused by the live web turn flow (the browser already shows what the
+        # user typed), but kept here for protocol parity so a future web-replay
+        # endpoint can subscribe without touching this renderer again.
+        self._put("user_text", text=text)
+
     def show_usage(self, *, input_tokens: int, output_tokens: int,
                    cache_read: int, cache_creation: int,
                    cost_usd: float, turn: int) -> None:

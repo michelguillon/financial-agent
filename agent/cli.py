@@ -77,6 +77,11 @@ class RichRenderer:
             )
         )
 
+    def show_user_text(self, text: str) -> None:
+        # Used only by replay (the live REPL gets the user message from
+        # `prompt()` and never needs to render it back).
+        self.console.print(f"You> {text}", style=STYLE_USER_PROMPT)
+
     def show_usage(self, *, input_tokens: int, output_tokens: int,
                    cache_read: int, cache_creation: int,
                    cost_usd: float, turn: int) -> None:
@@ -251,6 +256,7 @@ class RichRenderer:
 
 if __name__ == "__main__":
     r = RichRenderer()
+    r.show_user_text("What did I spend on groceries last month?")
     r.show_assistant_text("# Hello\n\nThis is **rich** markdown.\n\n- bullet 1\n- bullet 2")
 
     r.show_tool_call("get_spending_summary", {"months": 12})
