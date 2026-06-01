@@ -10,11 +10,13 @@ after the interview — the classifier gets smarter with each approved rule,
 and the same agent loop powers both the maintenance task and the planning
 conversations.
 
-> **Status:** All six build steps shipped, plus Phase 2 (pytest, rules
-> table migration, taxonomy expansion, extend_taxonomy tool, web UI).
+> **Status:** Phase 1 (Steps 1–5) shipped, plus Phase 2 add-ons —
+> A1/A2 (rules table + taxonomy expansion), A3 (extend_taxonomy tool),
+> B1 (dispatch-layer code gate for `apply_*` tools), B2 (pytest with
+> ~100 tests), C4 (web UI), D2 (transcript replay).
 > **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
 > ephemeral sessions, $0.50 per-session budget cap._
-> See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done.
+> See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred.
 
 ---
 
@@ -41,12 +43,13 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
   condition and every error path is visible in the code.
   ([SPEC §3.2](docs/SPEC_AGENT.md#32--orchestration-raw-api-tool-use-no-framework))
 
-- **Two-phase classifier migration.** Phase 1 (this build): a SQLite rules
-  table is checked first; if no rule matches, fall through to the existing
-  hardcoded `if/elif` chain that already classifies real exports. Phase 2
-  (future): the hardcoded chain gets migrated into the rules table itself.
-  Phase 1 ships value without a rewrite.
-  ([SPEC §3.4](docs/SPEC_AGENT.md#34--classification-engine-migration-two-phase))
+- **Classifier migrated to a SQLite rules table.** Phase 1 used a
+  SQLite-first wrapper that fell through to the original hardcoded
+  `if/elif` chain on misses; A1 (Phase 2) ported the ~40 rules into
+  `classification_rules` and deleted the fallback chain. `rule_lookup.py`
+  is now the only path. The agent can extend the taxonomy at runtime via
+  the paired `preview_taxonomy_extension` / `apply_taxonomy_extension`
+  tools (A3). ([SPEC §3.4](docs/SPEC_AGENT.md#34--classification-engine-migration-two-phase))
 
 - **Demo-mode without auth.** A data-layer switch: if `data/real/` exists,
   use it; otherwise fall back to the synthetic dataset committed to the
@@ -57,6 +60,8 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 
 ## What's built so far
 
+**Phase 1 — original build sequence (SPEC §8):**
+
 | Step | Component | Status |
 |------|-----------|--------|
 | 1 | Synthetic data generator (15y of UK transactions) | ✅ |
@@ -64,9 +69,17 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 | 3 | SQLite-first rule lookup wrapper | ✅ |
 | 4 | Tool implementations (13 tools) + Docker | ✅ |
 | 5 | Agent loop (Sonnet 4.6 + Haiku 4.5 + prompt caching) | ✅ |
-| 6 | Web UI (FastAPI + React + Vite + Tailwind, SSE streaming) | ✅ |
 
-Methodology notes and surprises from each step are logged in
+**Phase 2 — add-ons shipped since the portfolio cut-off:**
+
+- **A1 + A2** — ~40 hardcoded rules migrated into `classification_rules`; taxonomy extended with Travel/rail/video.
+- **A3** — `extend_taxonomy` tool (paired `preview` + `apply`) so the agent can grow the taxonomy at runtime with user approval.
+- **B1** — dispatch-layer code gate that blocks `apply_*` tool calls unless conversation history shows a matching preview + user approval (regex fast-path + Haiku 4.5 fallback).
+- **B2** — pytest adoption, ~100 deterministic tests + 3 `@pytest.mark.llm` gated tests.
+- **C4** — web UI (FastAPI + React + Vite + Tailwind, single Docker image, SSE streaming, per-session DB + cost cap).
+- **D2** — `python -m agent.replay <path>` re-renders a recorded transcript through the existing Renderer protocol.
+
+Methodology notes and surprises from each step + Phase 2 item are logged in
 [docs/LEARNINGS.md](docs/LEARNINGS.md). The aim is that the *how* of each step is
 reusable, not just the *what*.
 
@@ -117,14 +130,24 @@ Agent: A 2% rate rise on £185k would cost you an extra
 [in 2,279 · out 565 · cache_read 9,378 · $0.0350 · turn 2]
 ```
 
-Verify each component independently:
+Run the test suite (no API key needed for the deterministic path):
 ```powershell
-docker compose run --rm agent python -m agent.tools.state
-docker compose run --rm agent python -m agent.tools.classification
-docker compose run --rm agent python -m agent.tools.scenarios
-docker compose run --rm agent python -m agent.tool_registry
-docker compose run --rm agent python -m agent.transcript
-docker compose run --rm agent python -m agent.agent   # deterministic, no API
+docker compose run --rm agent pytest --ignore=tests/test_web.py
+# 100 deterministic tests in ~65s. To also run the LLM-touching ones
+# (~$0.10 of Anthropic spend), set RUN_LLM_TESTS=1 in .env.
+```
+
+Replay a recorded session without spending API budget:
+```powershell
+docker compose run --rm agent python -m agent.replay logs/<timestamp>.jsonl
+docker compose run --rm agent python -m agent.replay logs/<ts>.jsonl --delay-seconds 1   # paced for live demos
+```
+
+Web UI (recruiter-clickable demo, synthetic data only, per-session $0.50 cap):
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.web.yml build web
+docker compose -f docker-compose.yml -f docker-compose.web.yml up web
+# Browse http://localhost:8000
 ```
 
 The synthetic dataset is 18,780 transactions spanning 2011-01-01 →
@@ -164,28 +187,40 @@ financial-agent/
 ├── CLAUDE.md                       project conventions for Claude Code
 ├── Dockerfile                      python:3.13-slim, non-root agentuser
 ├── docker-compose.yml              dev convenience: volume-mounts data/ and logs/
-├── requirements.txt                anthropic, python-dotenv, pandas, rich
+├── docker-compose.web.yml          web UI overlay: builds the multi-stage web image
+├── pytest.ini                      registers the `llm` marker, gates LLM tests
+├── requirements.txt                anthropic, python-dotenv, pandas, rich, fastapi (web), …
 ├── .env.example
 ├── docs/
-│   ├── SPEC_AGENT.md               architecture spec
-│   └── LEARNINGS.md                methodology log, one entry per build step
+│   ├── SPEC_AGENT.md                  architecture spec
+│   ├── LEARNINGS.md                   methodology log, one entry per step + Phase 2 item
+│   ├── PHASE_2_BACKLOG.md             what's shipped vs deferred
+│   └── AGENT_ARCHITECTURE_DIAGRAMS.html (open in a browser)
 ├── agent/
 │   ├── agent.py                    conversational loop, Renderer protocol, prompt caching
-│   ├── cli.py                      RichRenderer (display layer)
+│   ├── cli.py                      RichRenderer (terminal display layer)
+│   ├── replay.py                   `python -m agent.replay <jsonl>` — re-render transcripts (D2)
 │   ├── transcript.py               JSONL session logger
 │   ├── __main__.py                 REPL entry: `python -m agent`
 │   ├── claude_helpers.py           Anthropic client + retry + model constants
-│   ├── tool_registry.py            schemas + dispatch (13 tools)
+│   ├── tool_registry.py            schemas + dispatch + B1 apply-gate (13 tools)
 │   └── tools/                      state, classification, scenarios
+├── web/
+│   ├── backend/                    FastAPI app, per-session DB, $0.50 cap, SSE renderer (C4)
+│   └── frontend/                   React + Vite + Tailwind chat UI
+├── tests/                          pytest suite — ~100 deterministic + 3 @pytest.mark.llm
 ├── classifier/
-│   ├── bank_statement_parser.py    redacted copy of the private classifier
-│   └── rule_lookup.py              SQLite-first wrapper
+│   ├── bank_statement_parser.py    redacted copy of the private classifier (no more hardcoded chain post-A1)
+│   ├── rule_lookup.py              SQLite-only lookup against classification_rules
+│   └── rules_seed.py               canonical seed list of ~40 rules (loaded by db/seed_rules.py)
 ├── db/
 │   ├── schema.sql                  CREATE TABLEs from SPEC §4
-│   ├── database.py                 connection helpers, DATA_DIR, get_data_source
-│   └── migrate.py                  CSV → SQLite ingest
-└── data/
-    ├── finance.db                  gitignored, SQLite store
-    ├── synthetic/                  committed — generator + 15y of fake transactions
-    └── real/                       gitignored — never enters the repo
+│   ├── database.py                 connection helpers, DATA_DIR, get_data_source, SESSION_DB_PATH
+│   ├── migrate.py                  CSV → SQLite ingest
+│   └── seed_rules.py               loads rules_seed.py into classification_rules
+├── data/
+│   ├── finance.db                  gitignored, SQLite store
+│   ├── synthetic/                  committed — generator + 15y of fake transactions
+│   └── real/                       gitignored — never enters the repo
+└── logs/                           gitignored — JSONL session transcripts (replay-able via agent.replay)
 ```

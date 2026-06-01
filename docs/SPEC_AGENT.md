@@ -579,33 +579,48 @@ This is enforced by prompt instruction in Phase 1, and additionally by a dispatc
 
 ## 7. System Components
 
+Current tree, reflecting Phase 1 + Phase 2 add-ons (see [PHASE_2_BACKLOG](PHASE_2_BACKLOG.md) for which items shipped under which letter code):
+
 ```
 personal-finance-agent/
 ├── agent/
-│   ├── agent.py              ← main agent loop (Step 5)
-│   ├── tools/
-│   │   ├── classification.py ← get_unclassified, suggest, preview/apply, list_categories
-│   │   ├── scenarios.py      ← spending_summary, income, fixed_vs_disc, model_scenario
-│   │   └── state.py          ← get/set agent_state
-│   └── tool_registry.py      ← schemas + dispatch
+│   ├── agent.py              ← main agent loop (Step 5), Renderer protocol, prompt caching
+│   ├── cli.py                ← RichRenderer (terminal display layer)
+│   ├── replay.py             ← `python -m agent.replay <jsonl>` (D2)
+│   ├── transcript.py         ← JSONL session logger
+│   ├── __main__.py           ← REPL entry: `python -m agent`
+│   ├── claude_helpers.py     ← Anthropic client + retry + AGENT_MODEL/CLASSIFIER_MODEL
+│   ├── tool_registry.py      ← schemas + dispatch + B1 GATED_TOOLS apply-gate
+│   └── tools/
+│       ├── classification.py ← get_unclassified, suggest, preview/apply rule, preview/apply taxonomy
+│       ├── scenarios.py      ← spending_summary, income, fixed_vs_disc, model_scenario
+│       └── state.py          ← get/set agent_state
+├── web/                       ← C4
+│   ├── backend/              ← FastAPI app, per-session DB ContextVar, $0.50 cap, WebSseRenderer
+│   └── frontend/             ← React + Vite + Tailwind chat UI
+├── tests/                     ← pytest suite (B2) — ~100 deterministic + 3 @pytest.mark.llm
 ├── db/
-│   ├── schema.sql            ← CREATE TABLE statements above
-│   ├── database.py           ← SQLite connection + helpers
-│   └── migrate.py            ← CSV ingestion (handles synthetic + preprocessed formats)
+│   ├── schema.sql            ← CREATE TABLE statements (incl. classification_rules)
+│   ├── database.py           ← SQLite connection + helpers + SESSION_DB_PATH ContextVar (C4)
+│   ├── migrate.py            ← CSV ingestion (handles synthetic + preprocessed formats)
+│   └── seed_rules.py         ← loads classifier/rules_seed.py into classification_rules (A1)
 ├── classifier/
-│   ├── bank_statement_parser.py   ← original script, redacted per §9
-│   └── rule_lookup.py             ← Phase 1 SQLite-first wrapper
+│   ├── bank_statement_parser.py   ← original script, redacted per §9; categories() removed in A1
+│   ├── rule_lookup.py             ← SQLite-only lookup against classification_rules (post-A1)
+│   └── rules_seed.py              ← canonical seed rule list (A1)
 ├── data/
 │   ├── finance.db            ← gitignored, SQLite store
 │   ├── real/                 ← gitignored
 │   └── synthetic/
 │       ├── generate_synthetic.py
 │       └── transactions_synthetic.csv
+├── logs/                      ← gitignored — JSONL transcripts, replayable via agent.replay
 ├── Dockerfile                ← python:3.13-slim, non-root agentuser (§3.7)
 ├── docker-compose.yml        ← dev convenience: mounts data/, logs/, optional .env
+├── docker-compose.web.yml    ← C4 overlay: multi-stage web image (node→python)
+├── pytest.ini                ← registers `llm` marker, gates LLM tests
 ├── .dockerignore
-├── requirements.txt          ← anthropic, python-dotenv, pandas
-├── claude_helpers.py         ← adapted from mistral_helpers.py
+├── requirements.txt          ← anthropic, python-dotenv, pandas, rich, fastapi, …
 ├── .env                      ← gitignored; ANTHROPIC_API_KEY, optional RUN_LLM_TESTS
 └── .env.example              ← committed template
 ```
@@ -623,7 +638,7 @@ Build `generate_synthetic.py`. Produces 15 years of realistic transactions using
 Build `migrate.py`. Loads existing CSV exports into `transactions` table. Runs the existing `categories()` function to populate category columns. Validates: spot-check categorisation quality, count `Missing` rows, verify date range.
 
 **Step 3 — Rule lookup wrapper**
-Build `rule_lookup.py`. Adds the SQLite-first lookup to `categories()`. Write one test rule manually, verify it takes precedence over the hardcoded chain. This is the foundation Agent 1 builds on.
+Build `rule_lookup.py`. Adds the SQLite-first lookup to `categories()`. Write one test rule manually, verify it takes precedence over the hardcoded chain. This is the foundation Agent 1 builds on. _(Post-A1: the hardcoded fallback chain has been removed; `rule_lookup.py` is now the only path. See [LEARNINGS — A1 + A2](LEARNINGS.md#a1--a2--rules-into-table--taxonomy-expansion).)_
 
 **Step 4 — Tool implementations**
 Build all tool functions. Test each independently with direct function calls before plugging into the agent loop. No agent loop yet.
@@ -640,6 +655,8 @@ Shipped: React + Vite + Tailwind frontend served by a FastAPI backend; single Do
 - **Streaming** — `WebSseRenderer` ([web/backend/streaming.py](../web/backend/streaming.py)) implements the existing Renderer protocol but pushes events into an `asyncio.Queue` via `loop.call_soon_threadsafe`, since `run_turn` is synchronous and runs in a worker thread.
 
 Deployment shape: single image, served behind a tunnel (Cloudflare Tunnel or equivalent) that terminates HTTPS and sets `X-Forwarded-For`. See [LEARNINGS — C4](LEARNINGS.md#c4--web-ui) for the threading details and what got cut to ship.
+
+**Phase 2 add-ons beyond Step 6.** A1+A2 (rules into table + taxonomy expansion), A3 (extend_taxonomy tool), B1 (dispatch-layer apply-gate), B2 (pytest adoption), and D2 (transcript replay) all shipped under their backlog letter codes after Step 6. Each has a corresponding section in [LEARNINGS.md](LEARNINGS.md); status and scope live in [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md).
 
 ---
 

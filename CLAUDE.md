@@ -8,7 +8,7 @@ Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AG
 
 Personal finance agent: 13 tools (state, classification, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. Real-data classifier (`classifier/bank_statement_parser.py`) is a redacted copy of a private repo; synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
 
-**Build status: Phase 1 complete.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) are all shipped, verified end-to-end, and pushed. The Phase 2 backlog ([docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md)) lists deferred items from across the SPEC and LEARNINGS, organised by category with rough scope estimates. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
+**Build status: Phase 1 + 7 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest, ~100 deterministic tests), C4 (web UI), D2 (transcript replay). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
 
 ---
 
@@ -48,7 +48,7 @@ Constants in `agent/claude_helpers.py`. Rationale in [SPEC §3.3](docs/SPEC_AGEN
 `set_agent_state` is for durable facts the next session would benefit from (e.g. `mortgage_rate_change_date`). Not for conversational scratch, not for things re-derivable from a tool call. Rationale: [SPEC §3.1](docs/SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory).
 
 ### Taxonomy is table-defined; agent extends only with approval
-Post-A2 the taxonomy lives in `classifier/rules_seed.py` (loaded into `classification_rules` by `db/seed_rules.py`). A2 added `Travel`/`Transport/rail`/`Leisure/subscription/video`. NETFLIX/AIRBNB/TRAINLINE/DISNEY+ are deliberately kept in `data/synthetic/generate_synthetic.py:NOISE_MEMOS` so the agent demo loop still has Missing transactions to classify into the new categories. When the agent encounters something with no good fit, it must say so honestly (in the system prompt). A future A3 will let the agent propose new taxonomy entries via a paired preview/apply tool; until then, taxonomy edits require a source change to `rules_seed.py`.
+Post-A2 the taxonomy lives in `classifier/rules_seed.py` (loaded into `classification_rules` by `db/seed_rules.py`). A2 added `Travel`/`Transport/rail`/`Leisure/subscription/video`. NETFLIX/AIRBNB/TRAINLINE/DISNEY+ are deliberately kept in `data/synthetic/generate_synthetic.py:NOISE_MEMOS` so the agent demo loop still has Missing transactions to classify into the new categories. When the agent encounters something with no good fit, it must say so honestly (in the system prompt). Post-A3 the agent can extend the taxonomy at runtime via the paired `preview_taxonomy_extension` / `apply_taxonomy_extension` tools (B1 enforces the preview-before-apply contract at dispatch time). Edits to the canonical seed list still require a source change to `rules_seed.py`.
 
 ### Currency convention
 Transaction data: **£** (UK).
@@ -94,9 +94,11 @@ The test suite lives under [tests/](tests/) — one `test_<module>.py` per sourc
 
 ```powershell
 # Deterministic — no API key needed
-docker compose run --rm agent pytest                          # full suite, llm skipped
+docker compose run --rm agent pytest --ignore=tests/test_web.py   # full suite, llm skipped
 docker compose run --rm agent pytest -k state                 # one module
 docker compose run --rm agent pytest tests/test_classification.py -v
+
+# (test_web.py needs the web image; run via the web compose overlay — see Web UI section.)
 
 # Generators and migrators are still ad-hoc entry points (not pytest):
 docker compose run --rm agent python data/synthetic/generate_synthetic.py
@@ -104,6 +106,10 @@ docker compose run --rm agent python db/migrate.py --replace
 
 # Manual eyeball check on the CLI rendering layer:
 docker compose run --rm agent python -m agent.cli
+
+# Replay a recorded transcript (D2) — re-renders without spending API budget:
+docker compose run --rm agent python -m agent.replay logs/<timestamp>.jsonl
+docker compose run --rm agent python -m agent.replay logs/<ts>.jsonl --delay-seconds 1   # paced
 ```
 
 LLM-touching tests are gated by `RUN_LLM_TESTS=1`. Set it in `.env` alongside `ANTHROPIC_API_KEY` to include them:
