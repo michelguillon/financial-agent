@@ -23,11 +23,8 @@ Shipped: paired `preview_taxonomy_extension` + `apply_taxonomy_extension` tools 
 
 ## B. Safety & hardening
 
-### B1 — Code gate for `apply_classification_rule`
-**What.** The `tool_registry.dispatch()` function inspects the recent conversation history before allowing `apply_classification_rule` to run. If no approval pattern is detected ("yes", "ok", "go ahead", "looks right", etc. in the user message after the preview), it raises an error that gets injected as `is_error: True` tool_result.
-**Why.** Phase 1 enforces this contract via prompt instruction only. A code gate hardens against prompt injection, model regressions, or future tool-use patterns that bypass the convention.
-**Where from.** [SPEC §6](SPEC_AGENT.md#6-agent-loop) ("A code gate ... is a Phase 2 hardening option") and explicitly noted in the [Preview-before-apply cross-cutting decision](LEARNINGS.md#preview-before-apply-for-destructive-agent-tools).
-**Scope.** 2–3 hours. The tricky part is defining "approval pattern" generously enough to avoid false negatives. Probably need a small LLM call ("did this user message express approval?") rather than a regex.
+### ~~B1 — Code gate for `apply_*` tools~~ ✓ Done (2026-06-01)
+Shipped: `agent/tool_registry.py` declares `GATED_TOOLS` mapping `apply_classification_rule` and `apply_taxonomy_extension` to their required preview tools. `dispatch()` grew an optional `messages` kwarg; the agent loop threads `session.messages` through. `check_approval()` finds the most recent matching `preview_*` tool_use, locates the first plain-string user reply after it, runs a regex fast-path over an approve/deny phrase list, and falls back to Haiku 4.5 (forced tool-use) on ambiguous replies. Failures raise `ApprovalRequiredError`, which the loop converts into an `is_error` tool_result so the agent self-corrects. Test coverage: 14 deterministic tests + 1 `@pytest.mark.llm`. See [LEARNINGS — B1 — code gate for apply_* tools](LEARNINGS.md#b1--code-gate-for-apply_-tools).
 
 ### ~~B2 — Adopt pytest~~ ✓ Done (2026-05-31)
 Shipped: 47 deterministic tests in ~8s + 2 `@pytest.mark.llm` tests gated by `RUN_LLM_TESTS=1`. Hybrid DB fixture (session-scoped seed + per-test `shutil.copy`), monkeypatched `db.database.DB_PATH`, `__main__` smoke blocks deleted from 6 modules. See [LEARNINGS — B2 — pytest adoption](LEARNINGS.md#b2--pytest-adoption).
@@ -94,11 +91,11 @@ Shipped: FastAPI + React + Vite + Tailwind, single multi-stage Docker image. Per
 
 ---
 
-## Suggested ordering (updated post-C4)
+## Suggested ordering (updated post-B1)
 
-A1, A2, A3, B2, and C4 are done. Of what's left:
+A1, A2, A3, B1, B2, and C4 are done. Of what's left:
 
-**If picking the demo-hardening angle (most relevant now that the agent is publicly exposed):** B1 (code gate for `apply_*` tools) + D2 (transcript replay) + a tiny `/admin/stats` endpoint. ~half-day total. B1 makes prompt-injection materially harder; D2 lets recruiters watch a canned conversation without burning their $0.50 budget; stats give you a private monitoring view.
+**If picking the demo-hardening angle (continued from B1):** D2 (transcript replay) + a tiny `/admin/stats` endpoint. ~2-3h total. D2 lets recruiters watch a canned conversation without burning their $0.50 budget; stats give you a private monitoring view.
 
 **If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly".
 

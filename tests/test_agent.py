@@ -77,6 +77,42 @@ class _FakeClient:
     messages = _FakeMessages()
 
 
+def test_apply_without_preview_blocked_by_gate(tmp_db, monkeypatch):
+    """B1 end-to-end: assistant calls apply_classification_rule directly,
+    with no preview earlier in the session. The dispatch gate raises
+    ApprovalRequiredError, which the loop converts into an is_error
+    tool_result, and the loop continues."""
+    from agent.tool_registry import dispatch as real_dispatch
+
+    call_log: list[str] = []
+
+    def fake_create(**kw):
+        if not call_log:
+            call_log.append("tool_use_phase")
+            return _FakeResp([_FakeBlock(
+                "tool_use", id="tu_1", name="apply_classification_rule",
+                input={"pattern": ".*tesco.*", "category_main": "Groceries"},
+            )])
+        call_log.append("text_phase")
+        return _FakeResp([_FakeBlock("text", text="Sorry — I need to preview first.")])
+
+    monkeypatch.setattr("agent.agent.call_with_retry",
+                        lambda func, *a, **kw: fake_create(**kw))
+    monkeypatch.setattr("agent.agent.get_client", lambda: _FakeClient())
+
+    session = Session(data_source="synthetic")
+    final = run_turn(session, "Apply the tesco rule now.", SilentRenderer(),
+                     dispatch_fn=real_dispatch)
+
+    # 4 messages: user prompt, assistant w/ tool_use, user w/ tool_result, assistant w/ text
+    assert len(session.messages) == 4
+    tool_result = session.messages[2]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert tool_result["is_error"] is True
+    assert "preview_rule_application" in tool_result["content"]
+    assert final == "Sorry — I need to preview first."
+
+
 def test_dispatch_error_propagates_as_tool_result(tmp_db, monkeypatch):
     call_log: list[str] = []
 
@@ -89,7 +125,7 @@ def test_dispatch_error_propagates_as_tool_result(tmp_db, monkeypatch):
         call_log.append("text_phase")
         return _FakeResp([_FakeBlock("text", text="Done.")])
 
-    def bad_dispatch(name, input):
+    def bad_dispatch(name, input, *, messages=None):
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr("agent.agent.call_with_retry",

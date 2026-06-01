@@ -573,7 +573,7 @@ The agent cannot call `apply_classification_rule` speculatively. The conversatio
 3. User explicitly approves ("yes", "add it", "looks right")
 4. Only then does the agent call `apply_classification_rule`
 
-This is enforced by prompt instruction, not code gate (Phase 1). A code gate (checking conversation history for an approval signal before executing the tool) is a Phase 2 hardening option.
+This is enforced by prompt instruction in Phase 1, and additionally by a dispatch-layer code gate from B1 onward. The gate (`agent/tool_registry.py:check_approval`) inspects conversation history for any `apply_*` tool listed in `GATED_TOOLS` (currently `apply_classification_rule` and `apply_taxonomy_extension`), finds the most recent matching `preview_*` call, and requires an approval signal in the user message that came after the preview's `tool_result`. Approval detection is hybrid: a regex fast-path over an approve/deny phrase list, falling back to a Haiku 4.5 classifier on ambiguous replies. Failures raise `ApprovalRequiredError`, which the loop's existing `try/except` converts into an `is_error` tool_result so the agent can self-correct.
 
 ---
 

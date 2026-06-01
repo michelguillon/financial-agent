@@ -307,7 +307,7 @@ def run_turn(
         for tu in tool_uses:
             renderer.show_tool_call(tu.name, dict(tu.input))
             try:
-                result = dispatch_fn(tu.name, dict(tu.input))
+                result = dispatch_fn(tu.name, dict(tu.input), messages=session.messages)
                 is_error = False
                 content_str = _truncate(json.dumps(result, default=str, ensure_ascii=False))
             except Exception as e:

@@ -36,6 +36,8 @@ These came out of explicit design discussions — don't relitigate without good 
 ### Preview-before-apply for any irreversible-write tool
 Project-wide default. The classification flow is the worked example: `preview_rule_application` (no writes) → user approval → `apply_classification_rule` (mutates). Same shape for any new tool that performs a write the user can't trivially undo. See [docs/LEARNINGS.md → Preview-before-apply](docs/LEARNINGS.md#preview-before-apply-for-destructive-agent-tools).
 
+Since B1, this is additionally enforced at the dispatch layer: [agent/tool_registry.py](agent/tool_registry.py) `GATED_TOOLS` lists every `apply_*` tool that requires a matching `preview_*` call + user approval in conversation history before it runs. When you add a new irreversible-write tool, add it to `GATED_TOOLS` alongside its preview tool. See [docs/LEARNINGS.md → B1](docs/LEARNINGS.md#b1--code-gate-for-apply_-tools).
+
 ### Two model tiers, routed by task complexity
 - `AGENT_MODEL = "claude-sonnet-4-6"` — main agent loop, scenario reasoning, anything ambiguous.
 - `CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"` — `suggest_classification` only (constrained structured output, runs frequently).
