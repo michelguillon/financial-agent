@@ -33,7 +33,18 @@ CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 
 # Threshold above which the agent loop (Step 5) should batch Missing
 # transactions through the Batch API rather than calling sequentially.
+# Documented hint, not code-enforced: the agent decides per turn based on
+# the system-prompt nudge in agent.agent._STATIC_PROMPT (C2).
 BATCH_THRESHOLD = 10
+
+# Haiku 4.5 pricing per token (Sonnet's prices live in agent/agent.py;
+# Haiku is broken out here because bulk_classify_async / check_batch_results
+# need to compute realised cost without importing agent.agent).
+HAIKU_PRICE_INPUT = 1.0 / 1_000_000
+HAIKU_PRICE_OUTPUT = 5.0 / 1_000_000
+
+# Anthropic Batch API discount applied to both input and output rates.
+BATCH_DISCOUNT = 0.5
 
 
 # ---------------------------------------------------------------------------

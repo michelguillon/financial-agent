@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from agent.agent import run_turn  # noqa: E402
 from agent.replay import replay as replay_transcript  # noqa: E402
+from agent.tools import _stats_sink  # noqa: E402
 from db.database import SESSION_DB_PATH  # noqa: E402
 
 from web.backend.limits import (  # noqa: E402
@@ -69,6 +70,9 @@ async def lifespan(app: FastAPI):
     app.state.sessions = sessions
     app.state.rate_limiter = rate_limiter
     app.state.stats = stats
+    # C2: wire the agent-tool batch counters into this Stats instance.
+    # CLI runs leave the sink unset; the sink no-ops in that case.
+    _stats_sink.register(stats)
     # Pre-build the seed DB so the first user doesn't wait ~2s.
     await sessions._ensure_seed_db()
     sweeper_task = asyncio.create_task(sessions.run_sweeper())
@@ -81,6 +85,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         sessions.shutdown()
+        _stats_sink.reset()
 
 
 app = FastAPI(title="personal-finance-agent demo", lifespan=lifespan)

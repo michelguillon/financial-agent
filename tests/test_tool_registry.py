@@ -35,8 +35,12 @@ def test_unknown_tool_raises_keyerror():
 
 
 def test_registered_count_matches_modules():
-    # 13 tools total across state (2), classification (7), scenarios (4)
-    assert len(ANTHROPIC_TOOLS) == 13
+    # 15 tools total across state (2), classification (9), scenarios (4).
+    # Classification: get_unclassified_transactions, list_categories,
+    # suggest_classification, preview_rule_application,
+    # apply_classification_rule, preview_taxonomy_extension,
+    # apply_taxonomy_extension, bulk_classify_async, check_batch_results.
+    assert len(ANTHROPIC_TOOLS) == 15
 
 
 # ---------------------------------------------------------------------------

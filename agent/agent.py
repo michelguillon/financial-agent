@@ -119,6 +119,8 @@ You have 13 tools spanning state (agent_state), classification (get_unclassified
 
 **Taxonomy growth.** If a Missing transaction has no good fit in the existing taxonomy, use `extend_taxonomy` (paired `preview_taxonomy_extension` / `apply_taxonomy_extension`) instead of `apply_classification_rule`. Reserve `apply_classification_rule` for rules that map to a category already in the taxonomy. If you're unsure whether a tuple is new, call `list_categories` first.
 
+**Bulk classification.** If `get_unclassified_transactions` returns more than ~10 rows and the user wants to tackle the backlog, prefer `bulk_classify_async` over per-row `suggest_classification`: it costs 50% less but is asynchronous. After submitting, tell the user the `batch_id` and the rough ETA. The next session announces pending batches automatically. Retrieve via `check_batch_results(batch_id)`. For single rows or a small handful, stick with `suggest_classification` for the immediate response. Suggestions from a batch still go through the normal preview/apply approval flow before any rule lands.
+
 **State store boundary.** Use `set_agent_state` ONLY for durable facts the next session would benefit from (e.g. `mortgage_rate_change_date`, `avg_monthly_groceries_6m`, `primary_income_source`). Do NOT store conversational scratch, intermediate calculations, or anything you can trivially re-derive from a tool call. Every `set_agent_state` call requires a real rationale.
 
 **Taxonomy honesty.** The category taxonomy reflects this user's historical spending and has gaps (no `video` sub for streaming, no `rail` sub for trains, no `Travel` main). When `suggest_classification` returns an obviously-imperfect fit (e.g. NETFLIX → `Leisure/subscription/music`), say so out loud in your response — don't pretend it's a clean match. Offer to use the closest option AND note that a future taxonomy update could improve it.
@@ -167,6 +169,31 @@ def _read_all_agent_state() -> list[dict]:
     ]
 
 
+def _pending_batches_summary() -> str:
+    """One short line describing in-progress bulk_classify_async batches.
+
+    C2 cross-session announcement — when the agent boots in a future
+    session, it should see (and be able to mention) batches that haven't
+    been retrieved yet. Returns "" when nothing's pending.
+    """
+    with open_db() as conn:
+        rows = conn.execute(
+            "SELECT batch_id, memos_count, submitted_at "
+            "FROM pending_batches WHERE status = 'in_progress' "
+            "ORDER BY submitted_at",
+        ).fetchall()
+    if not rows:
+        return ""
+    parts = [
+        f"{r['batch_id']} ({r['memos_count']} memos, submitted {r['submitted_at']})"
+        for r in rows
+    ]
+    return (
+        f"Pending classification batches ({len(rows)}): " + "; ".join(parts) +
+        ". Call check_batch_results(batch_id) to retrieve suggestions."
+    )
+
+
 def build_system_prompt(
     data_source: str,
     now: date,
@@ -184,6 +211,8 @@ def build_system_prompt(
     if taxonomy is None:
         taxonomy = list_categories(source=data_source)
 
+    pending = _pending_batches_summary()
+
     dynamic = (
         f"Today's date: {now.isoformat()}\n"
         f"Data source: {data_source}\n"
@@ -194,6 +223,8 @@ def build_system_prompt(
         f"Persisted facts from prior sessions:\n"
         f"{format_state_snapshot(state_snapshot)}"
     )
+    if pending:
+        dynamic += f"\n\n{pending}"
     return [cacheable_text_block(_STATIC_PROMPT), cacheable_text_block(dynamic)]
 
 

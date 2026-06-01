@@ -40,9 +40,9 @@ Since B1, this is additionally enforced at the dispatch layer: [agent/tool_regis
 
 ### Two model tiers, routed by task complexity
 - `AGENT_MODEL = "claude-sonnet-4-6"` — main agent loop, scenario reasoning, anything ambiguous.
-- `CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"` — `suggest_classification` only (constrained structured output, runs frequently).
+- `CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"` — `suggest_classification` (single row, sync) and `bulk_classify_async` (Batch API, ~50% cheaper, async). The agent picks between them per turn based on the backlog size (>10 rows → batch). Both go through the same forced-tool-use shape so the output dict is identical.
 
-Constants in `agent/claude_helpers.py`. Rationale in [SPEC §3.3](docs/SPEC_AGENT.md#33--model-routing-sonnet-46-for-the-agent-loop-haiku-45-for-classification).
+Constants in `agent/claude_helpers.py` (incl. `HAIKU_PRICE_*` and `BATCH_DISCOUNT`). Rationale in [SPEC §3.3](docs/SPEC_AGENT.md#33--model-routing-sonnet-46-for-the-agent-loop-haiku-45-for-classification).
 
 ### State-store boundary rule
 `set_agent_state` is for durable facts the next session would benefit from (e.g. `mortgage_rate_change_date`). Not for conversational scratch, not for things re-derivable from a tool call. Rationale: [SPEC §3.1](docs/SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory).
@@ -142,6 +142,7 @@ If you're about to commit something from any of those paths, stop and ask.
 - **Code edits → `docker compose build` before testing.** The image doesn't bind-mount source.
 - **New tools → update both** the function and its `SCHEMAS` entry in the same module. `tool_registry.py` validates the pairing at import time.
 - **New irreversible-write tools → add a paired `preview_*` tool.** See the preview-before-apply convention above.
+- **New cross-session state tables → add to [db/schema.sql](db/schema.sql).** All `CREATE`s use `IF NOT EXISTS`; `db/database.py:open_db` runs the schema on every connect. The C2 `pending_batches` table is the most recent example.
 - **Pricing changes → update `agent/agent.py`'s `PRICE_*` constants and `claude_helpers.AGENT_MODEL`/`CLASSIFIER_MODEL` if model versions changed.**
 - **New `set_agent_state` use cases → check the state-store boundary rule.** Is this really a durable fact for next session, or just conversational scratch?
 - **New LEARNINGS entry → append to `docs/LEARNINGS.md` Step N section, or add a Cross-cutting decision** if the lesson generalises beyond the step.

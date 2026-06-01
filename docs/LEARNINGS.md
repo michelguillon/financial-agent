@@ -1699,3 +1699,139 @@ becomes useful, the JSON is the natural input.
 
 Admin-stats edit: ~1 hour of model time. Zero API costs. 8 new web
 tests added; the full web suite is now 21 tests in ~24s.
+
+---
+
+## C2 — Batch API for bulk Missing classification
+
+### Goal
+
+`suggest_classification` (Haiku 4.5) costs ~$0.001/call and runs once
+per Missing row. A real-data ingest typically lands tens-to-hundreds of
+Missing rows in one go. Switching the bulk path to Anthropic's Batch
+API gets a flat 50% discount across input + output — the documented
+headline cost lever from SPEC §3.3. Deferred from Step 5 because the
+sync agent loop didn't fit the "submit → come back later" UX; Phase 2's
+cross-session SQLite state machinery made it easy.
+
+### What shipped
+
+Two new tools in `agent/tools/classification.py`:
+
+- `bulk_classify_async(memos)` builds one Anthropic Batch API request
+  per memo (same forced-tool-use `submit_classification` shape as the
+  sync path, just wrapped in the batch envelope), submits, and persists
+  a row in a new `pending_batches` table with `status='in_progress'`.
+  Returns `{batch_id, status, memos_count, eta_hint}` — never blocks.
+- `check_batch_results(batch_id)` reads the row; if already completed
+  serves cached suggestions; otherwise calls `messages.batches.retrieve`
+  to check `processing_status`. On `ended`, streams the results, parses
+  each into the 6-field suggestion dict, computes realised cost via
+  `HAIKU_PRICE_* × BATCH_DISCOUNT` (new constants in `claude_helpers.py`),
+  and persists everything back to the row.
+
+Neither tool mutates transactions — the agent still goes through
+`preview_rule_application` → user approval → `apply_classification_rule`,
+which means B1's gate stays where it should and these tools sit
+outside `GATED_TOOLS`.
+
+Cross-session UX: `agent.agent._pending_batches_summary()` reads
+`pending_batches WHERE status='in_progress'` and adds a one-liner to
+the dynamic block of the system prompt. A future session sees
+"Pending classification batches (1): batch_xyz (42 memos, submitted
+…). Call check_batch_results(batch_id) to retrieve suggestions." The
+agent can mention this to the user verbatim.
+
+Stats: three new counters on `Stats` (`batches_submitted_total`,
+`batches_completed_total`, `batch_spend_usd_total`). Tools call into a
+tiny `agent.tools._stats_sink` module that no-ops by default and gets
+wired to the live Stats instance by the web app's lifespan. CLI runs
+leave the sink unset — perfect decoupling, no FastAPI imports leak
+into the agent tool layer.
+
+### Methodology that worked
+
+**Two tools, not one.** The original "auto-route at threshold N" idea
+in SPEC §3.3 would have buried the async semantics inside a single
+`suggest_classification` call. That breaks the mental model badly:
+sometimes the same tool name takes 2 seconds and returns suggestions,
+sometimes it returns a batch_id and you have to poll. Separating into
+`bulk_classify_async` + `check_batch_results` makes the async shape
+visible at the tool boundary, where the agent can reason about it.
+
+**Model picks the threshold, not code.** The prompt nudge says "if
+more than ~10 rows… prefer bulk_classify_async." `BATCH_THRESHOLD = 10`
+is a documented constant, not a code-enforced switch. Reasoning: the
+model has fuller context than any heuristic — it sees what the user is
+actually trying to do, whether the immediate answer matters, how
+patient the user feels. A hard threshold would fire batch_classify
+even for a casual "what's that one weird transaction" query.
+
+**`_stats_sink` indirection.** Counter wiring tempted me to import
+Stats into the tools module, which would have created a layering
+violation (agent depends on web). The sink module — Protocol-typed,
+default-None, `register(stats)` from the web lifespan — gets the
+counters without the dependency. Tests can patch the sink directly
+when they want to assert on it.
+
+**Mocked the batches API surgically.** `_FakeBatchesAPI` records
+`create_calls`, `retrieve_calls`, `results_calls`. The seven new tests
+cover the happy path (3-memo submit → in-progress poll → ended →
+parsed suggestions cached → second check serves from cache), the
+unhappy paths (unknown id, expired-only batch, empty memo list), and
+the on-disk side effects (pending row inserted, then updated to
+completed/failed with the right cost). No LLM cost.
+
+### Surprises
+
+**The Anthropic SDK takes plain dicts inside `batches.create`.**
+Initially I thought I'd need to import `Request` and
+`MessageCreateParamsNonStreaming` typed shapes. In fact the call
+accepts a list of dicts with `custom_id` + `params` — much cleaner
+than wrapping every request through helper constructors. Saved ~30
+lines.
+
+**Per-result token usage is on the inner `message.usage`.** The batch
+result wrapper goes envelope → message → usage. My cost computation
+walks that chain and treats missing layers as zero contribution, so a
+partial-success batch (some succeeded, some errored) costs only what
+actually succeeded. The expired-only test exercises the all-errored
+branch, where cost should be ~0 — and is.
+
+**The 109-test suite still runs in 57s.** I added 8 classification
+tests + 1 agent prompt test, expected ~70s; it came in at the same
+pacing because the new tests are pure unit (mocked SDK, single DB row
+each). The test budget held.
+
+### Decisions I'd revisit
+
+**No background sweeper.** If a user submits a batch and never returns,
+the row sits as `in_progress` forever. Eventually Anthropic times it
+out (24h) but `check_batch_results` would only flip the DB row on the
+next explicit poll. For a personal-use tool this is fine; for a hosted
+multi-user demo it'd be worth a periodic sweeper that polls all
+`in_progress` rows older than 24h and marks them `expired`.
+
+**Per-session DB scopes the cross-session UX to the same browser.**
+The web demo's per-session DB means a batch submitted in session A is
+invisible to session B (different `/tmp/agent-sessions/<id>/finance.db`).
+The "next session announces" UX only works in the CLI / single-DB
+mode. For the web demo, batches submitted during a session expire with
+that session — the $0.50 cap already bounds the realistic batch size,
+so this is acceptable.
+
+**Cost accounting reads token counts from the SDK objects.** If the
+SDK's response shape ever shifts (e.g. nested `usage.input_tokens`
+becomes `usage.input.tokens`), the cost calculation silently returns
+0 instead of the real number. A more defensive shape would assert on
+the structure. Today, the test fixtures freeze a known-good shape, so
+a real-API drift would be caught at the next test run on a new SDK
+version.
+
+### Cost
+
+C2 edit: ~2 hours of model time. Zero API costs in testing (mocked).
+Realised cost on the actual API: 50% off Haiku — so a 100-memo bulk
+classify costs about $0.05 instead of $0.10. 8 new agent-side tests +
+1 agent prompt test + 1 admin-stats shape extension. Full agent suite
+is now 109 tests in ~57s; web suite stays at 21 tests in ~21s.

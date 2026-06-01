@@ -50,11 +50,8 @@ Shipped: 47 deterministic tests in ~8s + 2 `@pytest.mark.llm` tests gated by `RU
 **Scope.** Day. Most code already exists (in `bank_statement_parser.py`'s `Budget` class); the work is exposing it as a CLI, adapting the file paths to the Docker-mounted `data/real/` location, and end-to-end testing with a real bank export.
 **Depends on.** Easier if B3 is done first (Budget class lives in its own module).
 
-### C2 — Batch API for bulk Missing classification
-**What.** When the agent processes >10 Missing rows in one go, route through Anthropic's Batch API instead of sequential calls. Async pattern: submit batch → return `batch_id` → user comes back later → `check_batch_results` retrieves and applies. 50% cost discount.
-**Why.** Documented in SPEC §3.3 with `BATCH_THRESHOLD = 10` as a constant in `claude_helpers.py`. Deferred from Step 5 because it's fundamentally an async UX that didn't fit the synchronous conversational loop.
-**Where from.** [SPEC §3.3 — cost levers](SPEC_AGENT.md#33--model-routing-sonnet-46-for-the-agent-loop-haiku-45-for-classification) + Step 5 plan decision ("Skip Batch API in Step 5").
-**Scope.** 1–2 days. Two new tools (`bulk_classify_async(memos)` + `check_batch_results(batch_id)`), persistence of pending batch jobs in a new table, and the cross-session UX ("you have N suggestions from yesterday — want to review them?").
+### ~~C2 — Batch API for bulk Missing classification~~ ✓ Done (2026-06-01)
+Shipped: two new tools in [agent/tools/classification.py](../agent/tools/classification.py) — `bulk_classify_async(memos)` submits an Anthropic Batch API request and persists state in a new `pending_batches` table; `check_batch_results(batch_id)` polls once, parses results back into the standard 6-field suggestion shape, and caches the completed batch locally. 50% discount on input + output. The async UX threads through `agent.agent.build_system_prompt` — pending in-progress batches are announced in the dynamic block of the next session so the agent can mention them. Batch counters surfaced in `/admin/stats` via a small `agent.tools._stats_sink` indirection (decoupled from FastAPI; CLI runs are a no-op). 8 new agent-side tests + 1 admin-side, full suite stays under 60s. See [LEARNINGS — C2](LEARNINGS.md#c2--batch-api-for-bulk-missing-classification).
 
 ### C3 — Conversation history summarisation into agent_state
 **What.** Once a session's messages array exceeds N turns, summarise the older turns into a short `agent_state` entry and drop them from the messages array. The agent gets the summary, not the full transcript, for context on long sessions.
@@ -101,13 +98,11 @@ Shipped: [GET /admin/stats](../web/backend/app.py) returns a JSON snapshot of se
 
 ---
 
-## Suggested ordering (updated post-/admin/stats)
+## Suggested ordering (updated post-C2)
 
-A1, A2, A3, B1, B2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
+A1, A2, A3, B1, B2, C2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
 
-**If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly".
-
-**If picking the cost-efficiency angle:** C2 (Batch API for bulk Missing) — 50% Anthropic discount on bulk classification runs. Useful once a real-data ingestion produces a fat Missing backlog (so naturally pairs with B3+C1).
+**If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly". Pairs naturally with C2 since real-data ingests produce the fat Missing backlogs that justify async batching.
 
 **If picking polish:** D1 (currency display) + the B2 CI residual. Each ~1 hour.
 

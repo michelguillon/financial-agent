@@ -36,8 +36,12 @@ class Stats:
     replay_streams_started_total: int = 0
     replay_streams_by_id: Counter = field(default_factory=Counter)
     rate_limit_rejections_total: int = 0
+    batches_submitted_total: int = 0
+    batches_completed_total: int = 0
+    batch_spend_usd_total: float = 0.0
     last_turn_at: datetime | None = None
     last_replay_at: datetime | None = None
+    last_batch_at: datetime | None = None
 
     # ----- increment hooks -------------------------------------------------
 
@@ -70,6 +74,18 @@ class Stats:
 
     def record_rate_limit_rejection(self) -> None:
         self.rate_limit_rejections_total += 1
+
+    # ----- C2 batch hooks (called via agent.tools._stats_sink) -------------
+
+    def record_batch_submitted(self) -> None:
+        self.batches_submitted_total += 1
+        self.last_batch_at = datetime.now(timezone.utc)
+
+    def record_batch_completed(self, cost_usd_delta: float) -> None:
+        self.batches_completed_total += 1
+        if cost_usd_delta > 0:
+            self.batch_spend_usd_total += cost_usd_delta
+        self.last_batch_at = datetime.now(timezone.utc)
 
     # ----- serialise -------------------------------------------------------
 
@@ -107,6 +123,12 @@ class Stats:
                 "streams_started_total": self.replay_streams_started_total,
                 "by_id": dict(self.replay_streams_by_id),
                 "last_replay_at": _iso(self.last_replay_at),
+            },
+            "batches": {
+                "submitted_total": self.batches_submitted_total,
+                "completed_total": self.batches_completed_total,
+                "spend_usd_total": round(self.batch_spend_usd_total, 6),
+                "last_batch_at": _iso(self.last_batch_at),
             },
         }
 

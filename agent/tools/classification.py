@@ -1,11 +1,15 @@
 """classification.py — agent tools for processing the Missing backlog (SPEC §5.1).
 
-Five tools:
+Tools:
   - get_unclassified_transactions(limit)
-  - suggest_classification(memo, amount, account_name)   [calls Claude Haiku]
-  - preview_rule_application(pattern, ...)               [no mutation]
-  - apply_classification_rule(pattern, ...)              [mutates Missing rows]
   - list_categories()
+  - suggest_classification(memo, amount, account_name)   [calls Claude Haiku, sync]
+  - preview_rule_application(pattern, ...)               [no mutation]
+  - apply_classification_rule(pattern, ...)              [mutates Missing rows; B1 gated]
+  - preview_taxonomy_extension(...)                       [no mutation]
+  - apply_taxonomy_extension(...)                         [mutates; B1 gated]
+  - bulk_classify_async(memos)                           [C2: Anthropic Batch API submit]
+  - check_batch_results(batch_id)                        [C2: poll/retrieve + persist]
 
 Two-step rule flow (per user decision, Step 4 plan):
   preview_rule_application -> show user how many rows would match
@@ -470,6 +474,276 @@ def suggest_classification(
 
 
 # ---------------------------------------------------------------------------
+# Bulk classification (C2) — Anthropic Batch API
+# ---------------------------------------------------------------------------
+#
+# Two tools that together replace per-row suggest_classification when the
+# backlog is large enough that the async UX is worth the 50% discount:
+#   bulk_classify_async(memos)   submits → returns batch_id
+#   check_batch_results(batch_id) polls once; returns suggestions on done
+#
+# State persists in pending_batches (see db/schema.sql) so a future session
+# can announce "you have N pending batches from earlier".
+# ---------------------------------------------------------------------------
+
+def _build_batch_request(memo: str, amount: float, account_name: str,
+                         taxonomy_json: str, transaction_id: int) -> dict:
+    """Build one entry for client.messages.batches.create(requests=[...]).
+
+    Mirrors suggest_classification's message shape (same _CLASSIFY_TOOL,
+    same forced tool_choice) so the batch results parse identically.
+    """
+    # Local import to keep this module importable without the Anthropic SDK.
+    from agent.claude_helpers import CLASSIFIER_MODEL
+
+    system = _SYSTEM_PROMPT.format(taxonomy=taxonomy_json)
+    user = (
+        f"Memo:         {memo}\n"
+        f"Amount:       £{amount:.2f}\n"
+        f"Account:      {account_name}\n"
+    )
+    return {
+        "custom_id": f"tx-{transaction_id}",
+        "params": {
+            "model": CLASSIFIER_MODEL,
+            "max_tokens": 512,
+            "tools": [_CLASSIFY_TOOL],
+            "tool_choice": {"type": "tool", "name": "submit_classification"},
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        },
+    }
+
+
+def bulk_classify_async(
+    memos: list[dict],
+    source: str | None = None,
+) -> dict:
+    """Submit a batch of classification requests to Anthropic's Batch API.
+
+    Args:
+        memos: list of {id, memo, amount, account_name}. The id is the
+               transaction id from get_unclassified_transactions; it goes
+               into custom_id so results can be matched back.
+        source: data_source label persisted on the pending_batches row.
+
+    Returns:
+        {batch_id, status: 'in_progress', memos_count, submitted_at, eta_hint}.
+
+    Does not block waiting for completion — the user is expected to come
+    back later (or in a future session) and call check_batch_results.
+    """
+    if not memos:
+        raise ValueError("bulk_classify_async needs at least one memo")
+    for m in memos:
+        for k in ("id", "memo", "amount", "account_name"):
+            if k not in m:
+                raise ValueError(f"memo missing required key {k!r}: {m}")
+
+    src = source or get_data_source()
+    taxonomy = list_categories(source=src)
+    taxonomy_json = json.dumps(taxonomy, indent=2)
+
+    requests = [
+        _build_batch_request(
+            m["memo"], float(m["amount"]), m["account_name"], taxonomy_json, int(m["id"]),
+        )
+        for m in memos
+    ]
+
+    from agent.claude_helpers import call_with_retry, get_client
+    from agent.tools import _stats_sink
+
+    response = call_with_retry(get_client().messages.batches.create, requests=requests)
+    batch_id = response.id
+
+    transaction_ids = [int(m["id"]) for m in memos]
+    with open_db() as conn:
+        conn.execute(
+            "INSERT INTO pending_batches "
+            "(batch_id, status, memos_count, transaction_ids, data_source) "
+            "VALUES (?, 'in_progress', ?, ?, ?)",
+            (batch_id, len(memos), json.dumps(transaction_ids), src),
+        )
+
+    _stats_sink.record_batch_submitted()
+
+    return {
+        "batch_id": batch_id,
+        "status": "in_progress",
+        "memos_count": len(memos),
+        "transaction_ids": transaction_ids,
+        "eta_hint": "Typically 1-5 minutes for batches under 100 memos; up to 24h ceiling.",
+    }
+
+
+def _parse_batch_result(result) -> dict:
+    """Turn one batch result entry into the 6-field suggestion dict.
+
+    The Anthropic SDK exposes each batch result as an object with .result
+    (an envelope with .type='succeeded'|'errored'|... and, on success, a
+    .message that mirrors a normal messages.create response). We pull the
+    tool_use block matching submit_classification.
+    """
+    custom_id = getattr(result, "custom_id", None)
+    transaction_id = None
+    if custom_id and custom_id.startswith("tx-"):
+        try:
+            transaction_id = int(custom_id[3:])
+        except ValueError:
+            pass
+
+    envelope = getattr(result, "result", None)
+    res_type = getattr(envelope, "type", None) if envelope is not None else None
+
+    if res_type != "succeeded":
+        # Surface the error so check_batch_results can still aggregate; the
+        # caller decides what to do with partial failures.
+        err = getattr(envelope, "error", None)
+        msg = getattr(err, "message", None) or str(envelope)
+        return {
+            "transaction_id": transaction_id,
+            "error": msg,
+        }
+
+    message = getattr(envelope, "message", None)
+    blocks = getattr(message, "content", []) or []
+    for block in blocks:
+        if getattr(block, "type", None) == "tool_use" and block.name == "submit_classification":
+            suggestion = dict(block.input)
+            suggestion["transaction_id"] = transaction_id
+            return suggestion
+    return {
+        "transaction_id": transaction_id,
+        "error": "no submit_classification tool_use in batch result",
+    }
+
+
+def _batch_cost_usd(results: list) -> float:
+    """Sum input/output tokens across a batch's results and apply Haiku
+    rates × BATCH_DISCOUNT. Missing usage records contribute 0."""
+    from agent.claude_helpers import (
+        BATCH_DISCOUNT, HAIKU_PRICE_INPUT, HAIKU_PRICE_OUTPUT,
+    )
+    total_in = 0
+    total_out = 0
+    for r in results:
+        envelope = getattr(r, "result", None)
+        if envelope is None or getattr(envelope, "type", None) != "succeeded":
+            continue
+        message = getattr(envelope, "message", None)
+        usage = getattr(message, "usage", None)
+        if usage is None:
+            continue
+        total_in += getattr(usage, "input_tokens", 0) or 0
+        total_out += getattr(usage, "output_tokens", 0) or 0
+    return (total_in * HAIKU_PRICE_INPUT + total_out * HAIKU_PRICE_OUTPUT) * BATCH_DISCOUNT
+
+
+def check_batch_results(batch_id: str) -> dict:
+    """Poll Anthropic for `batch_id` once. Return cached suggestions if
+    we've already completed it; otherwise update the DB row and return
+    the current status.
+
+    Returns one of:
+        {status: 'in_progress', age_seconds, memos_count}
+        {status: 'completed', suggestions: [...], cost_usd, completed_at, memos_count}
+        {status: 'failed', error_detail, memos_count}
+    """
+    with open_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM pending_batches WHERE batch_id = ?", (batch_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown batch_id {batch_id!r}")
+
+        if row["status"] == "completed":
+            return {
+                "status": "completed",
+                "suggestions": json.loads(row["result_json"]) if row["result_json"] else [],
+                "cost_usd": row["cost_usd"],
+                "completed_at": row["completed_at"],
+                "memos_count": row["memos_count"],
+            }
+        if row["status"] == "failed":
+            return {
+                "status": "failed",
+                "error_detail": row["error_detail"],
+                "memos_count": row["memos_count"],
+            }
+
+    from agent.claude_helpers import call_with_retry, get_client
+    from agent.tools import _stats_sink
+
+    client = get_client()
+    batch = call_with_retry(client.messages.batches.retrieve, batch_id)
+    processing_status = getattr(batch, "processing_status", None)
+
+    if processing_status != "ended":
+        # Still cooking. Don't mutate the row.
+        return {
+            "status": "in_progress",
+            "processing_status": processing_status,
+            "memos_count": row["memos_count"],
+        }
+
+    # Ended — could be all-success, partial, or expired.
+    results = list(call_with_retry(client.messages.batches.results, batch_id))
+
+    # If every result errored AND the batch reports an end-state suggesting
+    # expiry/cancellation, persist a failed row. Otherwise treat as
+    # completed (with possibly-mixed entries).
+    request_counts = getattr(batch, "request_counts", None)
+    expired_count = getattr(request_counts, "expired", 0) or 0 if request_counts else 0
+    canceled_count = getattr(request_counts, "canceled", 0) or 0 if request_counts else 0
+    succeeded_count = getattr(request_counts, "succeeded", 0) or 0 if request_counts else 0
+
+    if succeeded_count == 0 and (expired_count or canceled_count):
+        with open_db() as conn:
+            conn.execute(
+                "UPDATE pending_batches "
+                "SET status = 'failed', completed_at = CURRENT_TIMESTAMP, "
+                "    error_detail = ? "
+                "WHERE batch_id = ?",
+                (
+                    f"Batch ended with {expired_count} expired + {canceled_count} canceled, "
+                    "0 succeeded.",
+                    batch_id,
+                ),
+            )
+        return {
+            "status": "failed",
+            "error_detail": (
+                f"Batch ended with {expired_count} expired + {canceled_count} canceled, "
+                "0 succeeded."
+            ),
+            "memos_count": row["memos_count"],
+        }
+
+    suggestions = [_parse_batch_result(r) for r in results]
+    cost_usd = _batch_cost_usd(results)
+
+    with open_db() as conn:
+        conn.execute(
+            "UPDATE pending_batches "
+            "SET status = 'completed', completed_at = CURRENT_TIMESTAMP, "
+            "    result_json = ?, cost_usd = ? "
+            "WHERE batch_id = ?",
+            (json.dumps(suggestions), cost_usd, batch_id),
+        )
+
+    _stats_sink.record_batch_completed(cost_usd)
+
+    return {
+        "status": "completed",
+        "suggestions": suggestions,
+        "cost_usd": cost_usd,
+        "completed_at": None,  # CURRENT_TIMESTAMP filled in by SQLite; client can re-query if needed
+        "memos_count": row["memos_count"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # JSON Schemas for the Anthropic tool registry
 # ---------------------------------------------------------------------------
 
@@ -606,6 +880,65 @@ SCHEMAS = [
                 "details": {"type": ["string", "null"]},
             },
             "required": ["category_main", "pattern"],
+        },
+    },
+    {
+        "name": "bulk_classify_async",
+        "description": (
+            "Submit a batch of Missing transactions to Anthropic's Batch API "
+            "for asynchronous classification. 50% cheaper than per-row "
+            "suggest_classification but results aren't immediate. Use when "
+            "the Missing backlog has more than ~10 rows; for smaller "
+            "backlogs prefer suggest_classification for the immediate "
+            "response. Returns {batch_id, status, memos_count, eta_hint}. "
+            "Call check_batch_results(batch_id) later (this session or a "
+            "future one — pending batches are announced in the system "
+            "prompt) to retrieve suggestions. Suggestions still go through "
+            "the normal preview_rule_application / apply_classification_rule "
+            "approval flow before any DB mutation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "memos": {
+                    "type": "array",
+                    "description": (
+                        "List of transactions to classify. Each item is the "
+                        "shape returned by get_unclassified_transactions."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "memo": {"type": "string"},
+                            "amount": {"type": "number"},
+                            "account_name": {"type": "string"},
+                        },
+                        "required": ["id", "memo", "amount", "account_name"],
+                    },
+                    "minItems": 1,
+                },
+            },
+            "required": ["memos"],
+        },
+    },
+    {
+        "name": "check_batch_results",
+        "description": (
+            "Poll Anthropic for a previously-submitted batch_id. Returns "
+            "{status: 'in_progress'} if not done, {status: 'completed', "
+            "suggestions: [...]} on success, or {status: 'failed', "
+            "error_detail} on expiry/cancellation. Idempotent: a completed "
+            "batch is cached locally so repeated calls don't re-query "
+            "Anthropic. Each suggestion includes a transaction_id matched "
+            "back to the original Missing row."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "batch_id": {"type": "string"},
+            },
+            "required": ["batch_id"],
         },
     },
 ]

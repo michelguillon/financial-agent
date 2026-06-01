@@ -308,13 +308,17 @@ def test_admin_stats_shape_when_authorised(admin_client: TestClient):
     r = admin_client.get("/admin/stats", headers=ADMIN_HEADERS)
     assert r.status_code == 200
     body = r.json()
-    assert {"process", "sessions", "turns", "replays"} <= set(body.keys())
+    assert {"process", "sessions", "turns", "replays", "batches"} <= set(body.keys())
     assert "uptime_seconds" in body["process"]
     assert body["sessions"]["active"] == 0
     assert body["sessions"]["created_total"] == 0
     assert body["turns"]["completed_total"] == 0
     assert body["replays"]["streams_started_total"] == 0
     assert body["replays"]["by_id"] == {}
+    assert body["batches"]["submitted_total"] == 0
+    assert body["batches"]["completed_total"] == 0
+    assert body["batches"]["spend_usd_total"] == 0.0
+    assert body["batches"]["last_batch_at"] is None
 
 
 def test_admin_stats_increments_on_session_create(admin_client: TestClient):

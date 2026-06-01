@@ -135,11 +135,13 @@ Every turn in a conversation resends the system prompt and the agent_state snaps
 
 For a 10-turn scenario conversation with a 2K token system prompt + state snapshot, caching reduces input cost on those tokens by ~90% across turns 2–10. At Sonnet 4.6 rates, a typical cached conversation costs ~$0.05–0.10 total.
 
-**Batch API — 50% off async classification**
+**Batch API — 50% off async classification** ✓ Shipped (C2, 2026-06-01)
 
 Processing a backlog of `Missing` transactions is not a real-time task. The user submits the batch and checks back. This is exactly the Batch API use case: 50% discount across all models, results returned asynchronously.
 
 Haiku 4.5 + Batch API = $0.50/$2.50 per million tokens — effectively negligible for personal use volumes.
+
+Shipped via two tools in [agent/tools/classification.py](../agent/tools/classification.py): `bulk_classify_async(memos)` submits to Anthropic's Batch API + persists a row in `pending_batches`; `check_batch_results(batch_id)` polls once and caches the parsed suggestions back. Cross-session UX: `build_system_prompt` reads in-progress rows and adds a one-liner to the dynamic block so the next session announces pending work. The agent decides per-turn whether to batch or use `suggest_classification`, guided by the prompt nudge in `_STATIC_PROMPT`; `BATCH_THRESHOLD = 10` stays as a documented hint. See [LEARNINGS — C2](LEARNINGS.md#c2--batch-api-for-bulk-missing-classification).
 
 ```python
 # Batch classification: use for bulk Missing transaction processing

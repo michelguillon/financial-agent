@@ -32,6 +32,26 @@ def test_format_state_snapshot_empty():
     assert "no facts" in format_state_snapshot([])
 
 
+def test_system_prompt_includes_pending_batch_summary(tmp_db):
+    """C2: pending batches surface as a one-liner in the dynamic block."""
+    import json as _json
+
+    from db.database import open_db
+
+    with open_db() as conn:
+        conn.execute(
+            "INSERT INTO pending_batches "
+            "(batch_id, status, memos_count, transaction_ids, data_source) "
+            "VALUES (?, 'in_progress', ?, ?, ?)",
+            ("batch_pending_001", 42, _json.dumps([1, 2, 3]), "synthetic"),
+        )
+    blocks = build_system_prompt("synthetic", date(2026, 6, 1))
+    dyn = blocks[1]["text"]
+    assert "batch_pending_001" in dyn
+    assert "42 memos" in dyn
+    assert "check_batch_results" in dyn
+
+
 def test_format_state_snapshot_populated():
     out = format_state_snapshot([
         {"key": "test_a", "value": 412.50, "confidence": "calculated",

@@ -90,3 +90,31 @@ CREATE TABLE IF NOT EXISTS agent_state (
     session_id   TEXT,
     updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+
+-- ---------------------------------------------------------------------------
+-- pending_batches: cross-session record of Anthropic Batch API jobs (C2).
+-- bulk_classify_async inserts one row per submitted batch with
+-- status='in_progress'; check_batch_results flips it to 'completed' (and
+-- persists result_json + cost_usd) or 'failed' (with error_detail) when
+-- the batch ends.
+--
+-- The agent loop's build_system_prompt reads this on each turn so a future
+-- session can announce "you have N pending batches from earlier".
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pending_batches (
+    batch_id         TEXT PRIMARY KEY,
+    submitted_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at     DATETIME,
+    status           TEXT NOT NULL DEFAULT 'in_progress',
+                         -- 'in_progress' | 'completed' | 'failed' | 'expired'
+    memos_count      INTEGER NOT NULL,
+    transaction_ids  TEXT NOT NULL,        -- JSON list of ints
+    result_json      TEXT,                 -- JSON list of suggestion dicts; NULL until completed
+    cost_usd         REAL,                 -- realised cost (Haiku × BATCH_DISCOUNT); NULL until completed
+    error_detail     TEXT,                 -- non-null when status='failed'
+    data_source      TEXT NOT NULL DEFAULT 'synthetic'
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_batches_status
+    ON pending_batches(status);
