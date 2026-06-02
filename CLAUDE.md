@@ -6,9 +6,9 @@ Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AG
 
 ## Project shape
 
-Personal finance agent: 15 tools (state, classification incl. C2 batch, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. The redacted legacy ingest pipeline ([classifier/budget_importer.py](classifier/budget_importer.py)) is preserved from the private repo for C1; today's classifier path lives in [classifier/rule_lookup.py](classifier/rule_lookup.py) (SQLite-backed). The synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
+Personal finance agent: 15 tools (state, classification incl. C2 batch, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. The redacted legacy ingest pipeline ([classifier/budget_importer.py](classifier/budget_importer.py)) is wired into `python -m db.migrate --raw` (C1) for real-data ingestion; today's classifier path lives in [classifier/rule_lookup.py](classifier/rule_lookup.py) (SQLite-backed). The synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
 
-**Build status: Phase 1 + 10 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 109 agent + 21 web deterministic tests + 3 LLM-gated), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
+**Build status: Phase 1 + 11 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 116 agent + 21 web deterministic tests + 3 LLM-gated), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C1 (real-data ingestion CLI), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
 
 ---
 
@@ -94,7 +94,7 @@ The demo runs synthetic-data-only forever — real-data ingestion via the web is
 
 ## Verify-by-running (pytest)
 
-The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). 109 agent-side deterministic tests run in ~60s + 21 web tests in ~25s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS.md#b2--pytest-adoption).
+The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). 116 agent-side deterministic tests run in ~65s + 21 web tests in ~25s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS.md#b2--pytest-adoption).
 
 ```powershell
 # Deterministic — no API key needed
@@ -107,6 +107,11 @@ docker compose run --rm agent pytest tests/test_classification.py -v
 # Generators and migrators are still ad-hoc entry points (not pytest):
 docker compose run --rm agent python data/synthetic/generate_synthetic.py
 docker compose run --rm agent python db/migrate.py --replace
+
+# C1 — real-data ingestion (drop raw exports into data/real/raw/ first):
+docker compose run --rm agent python -m db.migrate --raw 2026_06_02
+#   reads data/real/raw/<date>_*.csv → writes data/real/preprocessed/<date>_*.csv
+#   → ingests into data/finance.db as data_source='real'.
 
 # Manual eyeball check on the CLI rendering layer:
 docker compose run --rm agent python -m agent.cli
@@ -143,6 +148,7 @@ If you're about to commit something from any of those paths, stop and ask.
 - **New tools → update both** the function and its `SCHEMAS` entry in the same module. `tool_registry.py` validates the pairing at import time.
 - **New irreversible-write tools → add a paired `preview_*` tool.** See the preview-before-apply convention above.
 - **New cross-session state tables → add to [db/schema.sql](db/schema.sql).** All `CREATE`s use `IF NOT EXISTS`; `db/database.py:open_db` runs the schema on every connect. The C2 `pending_batches` table is the most recent example.
+- **Real-data ingest (`python -m db.migrate --raw <date>`)** reads from `data/real/raw/<date>_*.csv` and writes `data/real/preprocessed/<date>_*.csv` before ingesting. Root is `BUDGET_DATA_DIR` (default `./data/real`); override per-invocation with `--budget-root`. `main()` sets `SESSION_DB_PATH=args.db` so `classifier.rule_lookup` opens against the right DB even when `--db` differs from the module default.
 - **Pricing changes → update `agent/agent.py`'s `PRICE_*` constants and `claude_helpers.AGENT_MODEL`/`CLASSIFIER_MODEL` if model versions changed.**
 - **New `set_agent_state` use cases → check the state-store boundary rule.** Is this really a durable fact for next session, or just conversational scratch?
 - **New LEARNINGS entry → append to `docs/LEARNINGS.md` Step N section, or add a Cross-cutting decision** if the lesson generalises beyond the step.

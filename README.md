@@ -10,12 +10,13 @@ after the interview — the classifier gets smarter with each approved rule,
 and the same agent loop powers both the maintenance task and the planning
 conversations.
 
-> **Status:** Phase 1 (Steps 1–5) shipped, plus ten Phase 2 add-ons —
+> **Status:** Phase 1 (Steps 1–5) shipped, plus eleven Phase 2 add-ons —
 > A1/A2 (rules table + taxonomy expansion), A3 (extend_taxonomy tool),
-> B1 (dispatch-layer apply-gate), B2 (pytest, 109 deterministic +
-> 3 LLM-gated tests), B3 (budget_importer rename), C2 (Batch API for
-> bulk Missing, 50% Haiku discount), C4 (web UI), D2 + web-replay
-> toggle (transcript replay), /admin/stats (operator monitoring).
+> B1 (dispatch-layer apply-gate), B2 (pytest, 116 deterministic +
+> 3 LLM-gated tests), B3 (budget_importer rename), C1 (real-data
+> ingestion CLI), C2 (Batch API for bulk Missing, 50% Haiku discount),
+> C4 (web UI), D2 + web-replay toggle (transcript replay),
+> /admin/stats (operator monitoring).
 > **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
 > ephemeral sessions, $0.50 per-session budget cap._
 > See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred.
@@ -79,6 +80,7 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 - **B1** — dispatch-layer code gate that blocks `apply_*` tool calls unless conversation history shows a matching preview + user approval (regex fast-path + Haiku 4.5 fallback).
 - **B2** — pytest adoption, 109 deterministic agent-side tests + 21 web tests + 3 `@pytest.mark.llm` gated tests.
 - **B3** — `classifier/bank_statement_parser.py` renamed to `classifier/budget_importer.py` (the file had zero importers post-A1); accurate filename, unblocks C1.
+- **C1** — `python -m db.migrate --raw YYYY_MM_DD` ingests fresh bank exports inside the container: combines per-account raw CSVs in `data/real/raw/`, classifies via the SQLite rules table, writes a preprocessed CSV under `data/real/preprocessed/`, and ingests into `data/finance.db` as `data_source='real'`. SQLite-only; the legacy Excel-writer path stays dormant.
 - **C2** — `bulk_classify_async` + `check_batch_results` route the Missing backlog through Anthropic's Batch API at 50% off. Async by design; pending batches announced cross-session.
 - **C4** — web UI (FastAPI + React + Vite + Tailwind, single Docker image, SSE streaming, per-session DB + cost cap).
 - **D2** — `python -m agent.replay <path>` re-renders a recorded transcript through the existing Renderer protocol.
@@ -139,8 +141,18 @@ Agent: A 2% rate rise on £185k would cost you an extra
 Run the test suite (no API key needed for the deterministic path):
 ```powershell
 docker compose run --rm agent pytest --ignore=tests/test_web.py
-# 100 deterministic tests in ~65s. To also run the LLM-touching ones
+# 116 deterministic tests in ~65s. To also run the LLM-touching ones
 # (~$0.10 of Anthropic spend), set RUN_LLM_TESTS=1 in .env.
+```
+
+Ingest fresh real bank exports (C1, local network only):
+```powershell
+# Drop raw exports into data/real/raw/<date>_amex.csv,
+#                       data/real/raw/<date>_accounts_download.csv, etc.
+docker compose run --rm agent python -m db.migrate --raw 2026_06_02
+# Writes a preprocessed CSV to data/real/preprocessed/ and ingests into
+# data/finance.db as data_source='real'. Override the input root with
+# --budget-root ./data/somewhere_else.
 ```
 
 Replay a recorded session without spending API budget:
@@ -172,15 +184,16 @@ classification backlog on first run.
 Real bank data lives only on the author's local network — never in this
 repo, never on a remote.
 
-The legacy importer (`budget_importer.py`, copied from a private repo and
-preserved for C1) is redacted before commit per
+The legacy importer (`budget_importer.py`, copied from a private repo) is
+redacted before commit per
 [SPEC §9](docs/SPEC_AGENT.md#9-privacy-and-access-pattern): account
 numbers, employer names, cleaner names, cardholder details, and loan
 references all become generic placeholders. The synthetic generator uses
 the same placeholders, so synthetic and real data flow through the same
 classifier path. (The classifier itself moved into [classifier/rules_seed.py](classifier/rules_seed.py)
-+ [classifier/rule_lookup.py](classifier/rule_lookup.py) in A1; the importer
-is dormant until C1.)
++ [classifier/rule_lookup.py](classifier/rule_lookup.py) in A1; C1 wired
+the importer's `combine → import_raw → preprocessed` chain into
+`python -m db.migrate --raw`, leaving the Excel-writer path dormant.)
 
 `.gitignore` enforces the boundary: `data/real/`, `finance.db`, `.env`,
 and `logs/` can never be staged accidentally.
@@ -216,9 +229,9 @@ financial-agent/
 ├── web/
 │   ├── backend/                    FastAPI app, per-session DB, $0.50 cap, SSE renderer (C4)
 │   └── frontend/                   React + Vite + Tailwind chat UI
-├── tests/                          pytest suite — ~100 deterministic + 3 @pytest.mark.llm
+├── tests/                          pytest suite — 116 deterministic + 3 @pytest.mark.llm
 ├── classifier/
-│   ├── budget_importer.py          legacy bank-CSV → Excel ingestion pipeline (dormant; preserved for C1)
+│   ├── budget_importer.py          raw bank-CSV ingestion pipeline (C1: drives `python -m db.migrate --raw`)
 │   ├── rule_lookup.py              SQLite-only lookup against classification_rules
 │   └── rules_seed.py               canonical seed list of ~40 rules (loaded by db/seed_rules.py)
 ├── db/

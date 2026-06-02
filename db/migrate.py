@@ -16,10 +16,18 @@ data_source='real' by default; that's overridable with --source.
 Dates: ISO (YYYY-MM-DD) and UK (DD/MM/YYYY) both accepted; rows fall
 through several format guesses before erroring.
 
+`--raw DATE` (C1) runs the legacy Budget pipeline upfront — combines per-
+account raw exports from `data/real/raw/`, classifies via the
+`classification_rules` table, writes a preprocessed CSV under
+`data/real/preprocessed/`, and ingests it as `data_source='real'`. Use
+this on a freshly-checked-out container to onboard a real bank export
+without leaving Docker.
+
 Usage:
     python db/migrate.py                           # synthetic CSV, append
     python db/migrate.py --csv data/synthetic/...  # explicit CSV
     python db/migrate.py --replace                 # clear data_source first
+    python db/migrate.py --raw 2026_06_02          # legacy pipeline + ingest
 """
 
 from __future__ import annotations
@@ -224,6 +232,14 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--csv", type=Path, default=DEFAULT_CSV,
                    help=f"CSV to ingest (default: {DEFAULT_CSV.relative_to(PROJECT_ROOT)})")
+    p.add_argument("--raw", metavar="DATE", default=None,
+                   help="Run the Budget pipeline for the given YYYY_MM_DD date "
+                        "stamp first (combines + classifies + writes a "
+                        "preprocessed CSV), then ingest the result. Reads from "
+                        "BUDGET_DATA_DIR (default ./data/real). Overrides --csv.")
+    p.add_argument("--budget-root", type=Path, default=None,
+                   help="Override BUDGET_DATA_DIR for --raw (e.g. "
+                        "./data/real_other). No effect without --raw.")
     p.add_argument("--source", default=None,
                    help="Override data_source value (default: 'synthetic' for "
                         "synthetic CSVs, 'real' for preprocessed CSVs)")
@@ -233,31 +249,58 @@ def main(argv: list[str] | None = None) -> int:
                    help=f"DB path (default: {DB_PATH.relative_to(PROJECT_ROOT)})")
     args = p.parse_args(argv)
 
-    if not args.csv.exists():
-        print(f"ERROR: CSV not found: {args.csv}", file=sys.stderr)
-        return 1
+    # Scope rule_lookup (and any other get_connection() caller) to the same
+    # DB main() is operating on. Without this, --db overrides only affect
+    # the explicit `conn` we hold here; rule_lookup would still open against
+    # the module-level DB_PATH default. SESSION_DB_PATH was introduced for
+    # the web UI; reusing it here gives the CLI the same isolation.
+    from db.database import SESSION_DB_PATH
+    _token = SESSION_DB_PATH.set(args.db)
+    try:
+        return _run(args)
+    finally:
+        SESSION_DB_PATH.reset(_token)
 
-    # Pick the default source from the CSV format when --source wasn't given.
-    if args.source is None:
-        with args.csv.open("r", encoding="utf-8") as fh:
-            header = next(csv.reader(fh))
-        fmt = detect_format(header)
-        args.source = "synthetic" if fmt == "synthetic" else "real"
 
-    print(f"DB:     {args.db}")
-    print(f"CSV:    {args.csv}")
-    print(f"Source: {args.source!r}  (replace={args.replace})")
-
+def _run(args) -> int:
+    # Seed rules first — rule_lookup.categories() queries the table during
+    # the Budget pipeline (--raw), and seeding before ingest is idempotent
+    # for the synthetic path. Open the DB once and thread the connection.
     with open_db(args.db) as conn:
-        inserted = ingest(args.csv, conn, args.source, args.replace)
-        print(f"\nInserted {inserted:,} rows.")
-
-        # Always re-seed the canonical rules (deletes added_by='seed' rows
-        # and re-inserts from classifier/rules_seed.py). Agent-added rules
-        # (added_by='agent') are left alone.
         from db.seed_rules import seed as seed_rules
         n_rules = seed_rules(conn)
         print(f"Seeded {n_rules} classifier rules.")
+
+        # --raw: run the Budget pipeline, then ingest its preprocessed CSV.
+        if args.raw is not None:
+            from classifier.budget_importer import run_pipeline
+            from classifier.rule_lookup import reset_connection as _reset_rl
+            # Drop any stale rule_lookup connection so it re-opens against
+            # the (now-seeded) DB. Important for repeated test invocations.
+            _reset_rl()
+            print(f"Raw:    running Budget pipeline for {args.raw}")
+            args.csv = run_pipeline(args.raw, budget_root=args.budget_root)
+            print(f"Raw:    preprocessed CSV → {args.csv}")
+            if args.source is None:
+                args.source = "real"
+
+        if not args.csv.exists():
+            print(f"ERROR: CSV not found: {args.csv}", file=sys.stderr)
+            return 1
+
+        # Pick the default source from the CSV format when --source wasn't given.
+        if args.source is None:
+            with args.csv.open("r", encoding="utf-8") as fh:
+                header = next(csv.reader(fh))
+            fmt = detect_format(header)
+            args.source = "synthetic" if fmt == "synthetic" else "real"
+
+        print(f"DB:     {args.db}")
+        print(f"CSV:    {args.csv}")
+        print(f"Source: {args.source!r}  (replace={args.replace})")
+
+        inserted = ingest(args.csv, conn, args.source, args.replace)
+        print(f"\nInserted {inserted:,} rows.")
 
         validate(conn, args.source)
     return 0

@@ -201,12 +201,27 @@ All tool implementations accept an optional `source` parameter that defaults to 
 ```
 data/
   finance.db     ← gitignored, SQLite store
-  real/          ← gitignored
-    *.csv        ← original bank exports
+  real/          ← gitignored (the C1 --raw pipeline's BUDGET_DATA_DIR root)
+    raw/         ← original bank exports the user drops in
+      <date>_amex.csv
+      <date>_credit_card.csv
+      <date>_accounts_download.csv
+      <date>_sainsbury.csv
+    preprocessed/ ← <date>_accounts_preprocessed.csv (output of --raw)
+    budget.xlsx  ← optional, dormant Excel-writer destination
   synthetic/     ← committed
     transactions_synthetic.csv
     generate_synthetic.py
 ```
+
+C1 (2026-06-02) wired `python -m db.migrate --raw YYYY_MM_DD` to chain
+`Budget.combine_and_rename_files()` → `import_raw_data()` →
+`export_preprocessed_data()` → `ingest()`. `BUDGET_DATA_DIR` defaults to
+`./data/real`; overridable per-invocation with `--budget-root`. The
+in-container `SESSION_DB_PATH` ContextVar (introduced for C4) is set to
+`args.db` inside `main()` so `classifier.rule_lookup`'s lazy connection
+opens against the right SQLite file when `--db` differs from the
+module default.
 
 ### 3.7 — Containerisation
 
@@ -733,6 +748,9 @@ budget_data_dir = os.environ.get('BUDGET_DATA_DIR',
 # After
 budget_data_dir = os.environ.get('BUDGET_DATA_DIR', './data')
 ```
+
+> C1 (2026-06-02) later changed the default to `./data/real` and split the
+> path into `raw/` + `preprocessed/` sub-directories. See §3.6 above.
 
 **Checklist before first commit:**
 - [ ] No real account numbers (sort code + account number format `XX-XX-XX XXXXXXXX`)

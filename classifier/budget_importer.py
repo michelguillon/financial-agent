@@ -1,27 +1,45 @@
 # -*- coding: utf-8 -*-
-"""budget_importer — legacy ingestion + Excel-writer pipeline for raw bank CSVs.
+"""budget_importer — legacy ingestion pipeline for raw bank CSVs.
 
-Combines per-account raw exports (Amex, Barclaycard, current account) into a
-single preprocessed CSV and updates a monthly Excel budget workbook. The
-per-row classification chain that used to live alongside this code was
-migrated into `classification_rules` in A1 — see `classifier/rules_seed.py`
-for the canonical rule list and `classifier/rule_lookup.py` for the lookup;
-only the import path lives here now.
+Combines per-account raw exports (Amex, Barclaycard, Sainsbury, current
+account) into a single preprocessed CSV. The per-row classification chain
+that used to live alongside this code was migrated into
+`classification_rules` in A1 — see `classifier/rules_seed.py` for the
+canonical rule list and `classifier/rule_lookup.py` for the lookup; only
+the import path lives here now.
 
-Requires `openpyxl` at runtime, which is NOT currently in `requirements.txt`.
-This module is preserved for C1 (real-data ingestion CLI) and is not
-exercised by the agent at runtime. Run with:
+Layout under `BUDGET_DATA_DIR` (default `./data/real`):
+    <root>/raw/<date>_amex.csv               input — Amex export
+    <root>/raw/<date>_credit_card.csv        input — Barclaycard export
+    <root>/raw/<date>_sainsbury.csv          input — Sainsbury's CC export
+    <root>/raw/<date>_accounts_download.csv  input — current-account combined
+    <root>/raw/data*.csv                     input — per-month Barclays parts
+                                             that combine_and_rename_files
+                                             merges into accounts_download
+    <root>/preprocessed/<date>_accounts_preprocessed.csv  output — ingested by
+                                                          db/migrate.py --raw
+    <root>/budget.xlsx                       dormant — Excel-writer follow-up
 
-    python -m classifier.budget_importer -date YYYY_MM_DD
+Run end-to-end via `python -m db.migrate --raw YYYY_MM_DD` (recommended) or
+directly as a library:
+
+    from classifier.budget_importer import run_pipeline
+    csv_path = run_pipeline("2026_06_02")
+
+The standalone CLI entrypoint (`python -m classifier.budget_importer -date
+YYYY_MM_DD`) additionally calls `update_excel_budget()`, which requires
+`openpyxl` — NOT in `requirements.txt`. The agent's --raw flow stays
+openpyxl-free.
 
 Redaction history per SPEC §9: account numbers, employer names, cleaner
 names, cardholder/card details, loan references, file paths — all replaced
 with stable placeholders that match the synthetic data generator in
 `data/synthetic/`. The function bodies are otherwise unchanged.
 
-Renamed from `bank_statement_parser.py` in B3 (2026-06-02). The legacy
-`Bills/utilities/phone` Skype/landline sub-category was merged into
-`Mobile Phone` per SPEC §4's updated taxonomy.
+Renamed from `bank_statement_parser.py` in B3 (2026-06-02); C1 (2026-06-02)
+re-pathed input/output from `<root>/tmp_data/` to `<root>/raw/` +
+`<root>/preprocessed/`, wired the missing `categories` import, and added
+`run_pipeline()` for clean integration with `db/migrate.py`.
 """
 import csv
 import sys
@@ -36,8 +54,17 @@ import glob
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Allow `python -m classifier.budget_importer` to find sibling packages.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from classifier.rule_lookup import categories  # noqa: E402
+
 # Load environment variables from .env file
 load_dotenv()
+
+DEFAULT_BUDGET_ROOT = "./data/real"
 
 # helper functions
 def process_amount_sainsbury(df):
@@ -95,19 +122,27 @@ def set_up_account_name(df):
 
 
 class Budget:
-    def __init__(self, date):
+    def __init__(self, date, budget_root=None):
         self.data = pd.DataFrame(columns=["Date", "Account Number", "Amount", "Type", "Memo"])
         self.date = date
-        # Set up filenames - use environment variable or default to ./data
-        budget_data_dir = os.environ.get('BUDGET_DATA_DIR', './data')
-        self.path_to_tmp = os.path.join(budget_data_dir, 'tmp_data') + os.sep
-        self.file_amex = self.path_to_tmp + "%s_amex.csv" % self.date
-        self.file_barclaycard = self.path_to_tmp + "%s_credit_card.csv" % self.date
-        self.file_current_account =  self.path_to_tmp + "%s_accounts_download.csv" % self.date
-        self.file_preprocessed =  self.path_to_tmp + "%s_accounts_preprocessed.csv" % self.date
-        self.file_sainsbury = self.path_to_tmp + "%s_sainsbury.csv" % self.date
-        # NEW: Excel file path for Phase 4
-        self.file_excel = os.path.join(budget_data_dir, 'budget.xlsx')
+        # Resolve <root> from arg > BUDGET_DATA_DIR > default. C1 (2026-06-02)
+        # split the previous flat `<root>/tmp_data/` into raw/ + preprocessed/
+        # so the agent project's data/real/ layout stays self-documenting.
+        if budget_root is None:
+            budget_root = os.environ.get('BUDGET_DATA_DIR', DEFAULT_BUDGET_ROOT)
+        self.budget_root = os.fspath(budget_root)
+        self.path_to_raw = os.path.join(self.budget_root, 'raw') + os.sep
+        self.path_to_preprocessed = os.path.join(self.budget_root, 'preprocessed') + os.sep
+        os.makedirs(self.path_to_raw, exist_ok=True)
+        os.makedirs(self.path_to_preprocessed, exist_ok=True)
+        self.file_amex = self.path_to_raw + "%s_amex.csv" % self.date
+        self.file_barclaycard = self.path_to_raw + "%s_credit_card.csv" % self.date
+        self.file_current_account = self.path_to_raw + "%s_accounts_download.csv" % self.date
+        self.file_preprocessed = self.path_to_preprocessed + "%s_accounts_preprocessed.csv" % self.date
+        self.file_sainsbury = self.path_to_raw + "%s_sainsbury.csv" % self.date
+        # Excel-writer destination — dormant in the agent project, kept for
+        # the C1 follow-up that wires `update_excel_budget()` behind a flag.
+        self.file_excel = os.path.join(self.budget_root, 'budget.xlsx')
         # Set up headers for raw data
         self.headers_sainsbury = ["Date", "Memo", "Amount"]
         self.headers_amex_old = ["Date", "Reference", "Amount", "Memo", "Label", "log"]
@@ -122,7 +157,7 @@ class Budget:
            Skips if target files already exist to avoid overwriting."""
         try:
             logging.info("Budget   : Starting combination and rename process")
-            os.makedirs(self.path_to_tmp, exist_ok=True)
+            os.makedirs(self.path_to_raw, exist_ok=True)
 
             # Use existing file paths from __init__
             # self.file_current_account and self.file_amex are already defined
@@ -131,7 +166,7 @@ class Budget:
             if os.path.exists(self.file_current_account):
                 logging.info(f"Budget   : {self.file_current_account} already exists - skipping combine")
             else:
-                pattern = os.path.join(self.path_to_tmp, "data*.csv")
+                pattern = os.path.join(self.path_to_raw, "data*.csv")
                 data_files = sorted(glob.glob(pattern))
 
                 if not data_files:
@@ -145,7 +180,7 @@ class Budget:
             if os.path.exists(self.file_amex):
                 logging.info(f"Budget   : {self.file_amex} already exists - skipping rename")
             else:
-                activity_src = os.path.join(self.path_to_tmp, "activity.csv")
+                activity_src = os.path.join(self.path_to_raw, "activity.csv")
                 if os.path.exists(activity_src):
                     os.rename(activity_src, self.file_amex)
                     logging.info(f"Budget   : Renamed {activity_src} -> {self.file_amex}")
@@ -166,7 +201,10 @@ class Budget:
         df[["Amount"]] = df[["Amount"]].apply(pd.to_numeric, errors='coerce')
         df["Amount"] = -df["Amount"]
         # reorder columns
-        self.data = self.data._append(df[["Date", "Account Number", "Amount", "Type", "Memo"]])
+        self.data = pd.concat(
+            [self.data, df[["Date", "Account Number", "Amount", "Type", "Memo"]]],
+            ignore_index=True,
+        )
 
     # Funtion to import sainsbury raw data into database
     def import_sainsbury(self):
@@ -178,7 +216,10 @@ class Budget:
         df["Amount"] = df.apply(process_amount_sainsbury, axis=1)
 
         # reorder columns
-        self.data = self.data._append(df[["Date", "Account Number", "Amount", "Type", "Memo"]])
+        self.data = pd.concat(
+            [self.data, df[["Date", "Account Number", "Amount", "Type", "Memo"]]],
+            ignore_index=True,
+        )
 
     # Funtion to import barclaycard raw data into database
     def import_barclaycard(self):
@@ -198,7 +239,10 @@ class Budget:
         df[["Credit"]] = df[["Credit"]].apply(pd.to_numeric, errors='coerce')
         df["Amount"] = -(df["Credit"] + df["Debit"])
         # reorder columns
-        self.data = self.data_append(df[["Date", "Account Number", "Amount", "Type", "Memo"]])
+        self.data = pd.concat(
+            [self.data, df[["Date", "Account Number", "Amount", "Type", "Memo"]]],
+            ignore_index=True,
+        )
 
     # Funtion to import current account raw data into database
     def import_current_account(self):
@@ -206,11 +250,24 @@ class Budget:
         df.rename(columns={'Account':'Account Number' ,'Subcategory':'Type'},inplace=True)
         # Remove number column
         del df["Number"]
-        self.data = self.data._append(df[["Date", "Account Number", "Amount", "Type", "Memo"]])
+        self.data = pd.concat(
+            [self.data, df[["Date", "Account Number", "Amount", "Type", "Memo"]]],
+            ignore_index=True,
+        )
 
     # Add Account description columns
     def append_columns (self):
         self.data["Account Currency"] = "£"
+        if self.data.empty:
+            # pandas 2.x: apply() on an empty DataFrame returns no columns,
+            # which can't be assigned to a 4-key column list. Insert empty
+            # placeholders so the preprocessed CSV has the full schema.
+            for col in ["Account Number", "Account Type", "Account Name",
+                        "Category - Main", "Category - Sub",
+                        "Category - Sub2", "Details"]:
+                if col not in self.data.columns:
+                    self.data[col] = pd.Series(dtype="object")
+            return
         self.data['Account Number'] = self.data.apply(set_up_account_number, axis=1)
         self.data['Account Type'] = self.data.apply(set_up_account_type, axis=1)
         self.data['Account Name'] = self.data.apply(set_up_account_name, axis=1)
@@ -470,10 +527,11 @@ class Budget:
         """
         import shutil
 
-        # Set default Excel file path using environment variable
+        # Fall back to the workbook resolved in __init__ (which honoured the
+        # explicit budget_root arg or BUDGET_DATA_DIR), so both code paths
+        # stay consistent.
         if excel_file is None:
-            budget_data_dir = os.environ.get('BUDGET_DATA_DIR', './data')
-            excel_file = os.path.join(budget_data_dir, 'budget.xlsx')
+            excel_file = self.file_excel
 
         logging.info(f"Budget   : Loading existing data from {excel_file}, sheet '{sheet_name}'")
 
@@ -635,7 +693,7 @@ class Budget:
         errors = []
 
         # Delete data*.csv files
-        pattern = os.path.join(self.path_to_tmp, "data*.csv")
+        pattern = os.path.join(self.path_to_raw, "data*.csv")
         data_files = glob.glob(pattern)
 
         for f in data_files:
@@ -648,7 +706,7 @@ class Budget:
                 logging.error(f"Budget   : Failed to delete {f}: {e}")
 
         # Delete activity.csv if it still exists (shouldn't after rename, but just in case)
-        activity_file = os.path.join(self.path_to_tmp, "activity.csv")
+        activity_file = os.path.join(self.path_to_raw, "activity.csv")
         if os.path.exists(activity_file):
             try:
                 os.remove(activity_file)
@@ -672,6 +730,27 @@ class Budget:
                 print(f"  Failed to delete: {err['file']}")
 
         return {'deleted': deleted_files, 'errors': errors}
+
+
+# ---------------------------------------------------------------------------
+# Library entry point — used by db/migrate.py --raw. SQLite-only path:
+# combines per-account raw exports, classifies via classifier.rule_lookup,
+# and writes the preprocessed CSV that migrate.py:ingest() consumes. The
+# Excel-update path (update_excel_budget) is deliberately NOT called here
+# so the agent project stays openpyxl-free.
+# ---------------------------------------------------------------------------
+
+def run_pipeline(date_str, budget_root=None):
+    """Run combine → import_raw → export_preprocessed for one date stamp.
+
+    Returns the absolute path to the preprocessed CSV. Caller is
+    responsible for ingesting the CSV (see db/migrate.py --raw).
+    """
+    budget = Budget(date_str, budget_root=budget_root)
+    budget.combine_and_rename_files()
+    budget.import_raw_data()
+    budget.export_preprocessed_data()
+    return Path(budget.file_preprocessed).resolve()
 
 
 # MAIN PROGRAM

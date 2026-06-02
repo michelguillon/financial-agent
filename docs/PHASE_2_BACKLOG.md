@@ -40,12 +40,12 @@ Shipped: file renamed to [`classifier/budget_importer.py`](../classifier/budget_
 
 ## C. New capabilities
 
-### C1 — Real-data ingestion pipeline
-**What.** Wire the preserved `Budget` class into a CLI command so the user can ingest fresh bank exports without leaving the agent container: `docker compose run --rm agent python -m db.migrate --raw <date>`. Combines the existing `combine_and_rename_files` → `import_raw_data` → `export_preprocessed_data` → `migrate.py` chain.
-**Why.** Today, real-data ingestion requires the user's separate `..\banking` repo (not part of this project). For the agent to actually be useful long-term, importing fresh exports needs to live here.
-**Where from.** [SPEC §3.6](SPEC_AGENT.md#36--demo-mode) ("Real data access: local network only") + Step 2 plan ("only synthetic for now, defer real" was the deferred option).
-**Scope.** Day. Most code already exists (in `bank_statement_parser.py`'s `Budget` class); the work is exposing it as a CLI, adapting the file paths to the Docker-mounted `data/real/` location, and end-to-end testing with a real bank export.
-**Depends on.** Easier if B3 is done first (Budget class lives in its own module).
+### ~~C1 — Real-data ingestion pipeline~~ ✓ Done (2026-06-02)
+Shipped: `python -m db.migrate --raw YYYY_MM_DD` runs the Budget pipeline end-to-end inside the container. New `data/real/raw/` + `data/real/preprocessed/` layout (replacing the legacy `BUDGET_DATA_DIR/tmp_data/`); `BUDGET_DATA_DIR` defaults to `./data/real` and is overridable per-invocation with `--budget-root`. Three live bugs fixed in `classifier/budget_importer.py` (missing `categories` import, `self.data_append` typo, four `_append` calls broken in pandas 2.x). `SESSION_DB_PATH` reused inside `db/migrate.py:main()` so `rule_lookup` opens against `--db` not the module default. 7 new deterministic tests; suite now 116 tests in ~64s. See [LEARNINGS — C1](LEARNINGS.md#c1--real-data-ingestion-cli).
+
+**Residual / natural follow-ups:**
+- **`--with-excel` toggle.** `update_excel_budget()` is dormant inside `budget_importer.py`. Adding a flag that calls it (with `openpyxl` in `requirements.txt`) is mechanical now that the SQLite path is wired.
+- **Barclaycard / Sainsbury fixture coverage.** Tests cover current_account + amex paths; the other two importers were exercised end-to-end manually but lack pytest fixtures.
 
 ### ~~C2 — Batch API for bulk Missing classification~~ ✓ Done (2026-06-01)
 Shipped: two new tools in [agent/tools/classification.py](../agent/tools/classification.py) — `bulk_classify_async(memos)` submits an Anthropic Batch API request and persists state in a new `pending_batches` table; `check_batch_results(batch_id)` polls once, parses results back into the standard 6-field suggestion shape, and caches the completed batch locally. 50% discount on input + output. The async UX threads through `agent.agent.build_system_prompt` — pending in-progress batches are announced in the dynamic block of the next session so the agent can mention them. Batch counters surfaced in `/admin/stats` via a small `agent.tools._stats_sink` indirection (decoupled from FastAPI; CLI runs are a no-op). 8 new agent-side tests + 1 admin-side, full suite stays under 60s. See [LEARNINGS — C2](LEARNINGS.md#c2--batch-api-for-bulk-missing-classification).
@@ -95,13 +95,13 @@ Shipped: [GET /admin/stats](../web/backend/app.py) returns a JSON snapshot of se
 
 ---
 
-## Suggested ordering (updated post-B3)
+## Suggested ordering (updated post-C1)
 
-A1, A2, A3, B1, B2, B3, C2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
-
-**If picking the daily-driver angle:** C1 is now unblocked. Wire the real-data ingestion pipeline — `classifier/budget_importer.py` already has the combining + Excel-export logic; the C1 work is exposing it as a Docker-aware CLI (adapting paths to the mounted `data/real/` location, adding `openpyxl` to `requirements.txt`, end-to-end test with a real bank export). Pairs naturally with C2 since real-data ingests produce the fat Missing backlogs that justify async batching.
+A1, A2, A3, B1, B2, B3, C1, C2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
 
 **If picking polish:** D1 (currency display) + the B2 CI residual. Each ~1 hour.
+
+**If picking the daily-driver follow-up:** the `--with-excel` toggle on `python -m db.migrate --raw` (calls the dormant `update_excel_budget()` after SQLite ingest; needs `openpyxl` in `requirements.txt`). ~Half a day. Only matters if you still maintain `budget.xlsx` separately from the agent.
 
 **If picking nothing big:** C3 (history summarisation) is *not* recommended next — the $0.50 web cap already bounds context growth, so the value is minimal until you raise the cap or add D3 (resume conversation).
 

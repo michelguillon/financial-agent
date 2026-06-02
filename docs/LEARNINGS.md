@@ -1940,3 +1940,151 @@ altogether.
 B3 edit: ~40 minutes of model time. Zero API costs. Zero new tests
 (no code path to cover). Zero runtime changes — agent suite still 109
 tests in ~57s, web suite still 21 in ~21s.
+
+---
+
+## C1 — real-data ingestion CLI
+
+### What shipped
+
+`docker compose run --rm agent python -m db.migrate --raw YYYY_MM_DD`
+now ingests fresh bank exports into `data/finance.db` without leaving
+the container. Layout:
+
+```
+$BUDGET_DATA_DIR/raw/<date>_amex.csv               (input)
+$BUDGET_DATA_DIR/raw/<date>_accounts_download.csv  (input)
+$BUDGET_DATA_DIR/raw/<date>_credit_card.csv        (input — barclaycard)
+$BUDGET_DATA_DIR/raw/<date>_sainsbury.csv          (input)
+$BUDGET_DATA_DIR/preprocessed/<date>_accounts_preprocessed.csv (output)
+```
+
+`BUDGET_DATA_DIR` defaults to `./data/real` (gitignored). Overridable
+per-invocation with `--budget-root`. SQLite-only; `update_excel_budget()`
+stays dormant for a future `--with-excel` follow-up that would also
+add `openpyxl` to `requirements.txt`.
+
+### What B3 missed (three latent bugs in budget_importer.py)
+
+B3's framing was "zero importers, just rename." A grep confirmed nothing
+in the repo called `Budget`, so we shipped the rename without exercising
+the code. C1's first end-to-end run surfaced three bugs that had been
+sitting there since the file landed:
+
+1. **`categories` referenced but not imported.** Line 217's
+   `self.data.apply(categories, axis=1)` would have raised
+   `NameError` on the first call. A1 deleted the in-file `categories()`
+   function and migrated rules into `classification_rules`, but the
+   companion import (`from classifier.rule_lookup import categories`)
+   was never added — the call site fell through the cracks because
+   nothing imported `Budget` after A1 either.
+
+2. **`self.data_append` typo.** `import_barclaycard` had
+   `self.data = self.data_append(df[...])` — a missing dot. Would
+   have raised `AttributeError`. The other three importers spelled
+   `_append` correctly.
+
+3. **`DataFrame._append` removed in pandas 2.x.** All four
+   importers used the private `_append` API. pandas 2.0 removed it.
+   Replaced with `pd.concat([self.data, df[...]], ignore_index=True)`
+   in all four sites.
+
+Bugs (1)+(2) were B3's blind spot — a rename without a run leaves dead
+code looking healthy. Bug (3) was a pandas-major-version regression
+that nobody caught because the file never ran in the project's Python
+3.13 / pandas 2.x environment. Lesson reinforced: **a refactor that
+doesn't exercise the new code path can't be "done" — at minimum, run
+the standalone CLI once.** B3 hit zero importers so I skipped that
+step; C1 paid the bill for both refactors.
+
+### SESSION_DB_PATH reused from the web UI
+
+`rule_lookup.categories()` uses a module-level lazy SQLite connection
+opened against `db.database.DB_PATH` — the module default, not whatever
+`db/migrate.py:main()` was operating on. With the default `--db`,
+they match. The moment a test or user passed `--db ./somewhere/else`,
+`rule_lookup` connected to the OLD `data/finance.db` and saw a
+pre-A1 schema missing `account_match` — classification crashed with
+`sqlite3.OperationalError: no such column: account_match`.
+
+Fix: set `db.database.SESSION_DB_PATH` (the ContextVar introduced for
+C4's per-session web isolation) at the top of `main()` to `args.db`.
+`get_connection(None)` falls back to `SESSION_DB_PATH` before the
+module default, so `rule_lookup` re-opens against the correct DB on
+its next `_get_conn()` call. The web UI uses the same hook for the
+same reason; CLI just happens to want it too.
+
+Decoupled this from changing the public API of `rule_lookup`. The
+alternative — exposing a `set_db_path(path)` function — would have
+been a wider surface and a longer-lived dependency from CLI flow into
+classifier internals.
+
+### `pd.concat` and the empty-DataFrame edge case
+
+After replacing `_append` with `pd.concat`, an empty raw directory
+(no input files) produced a no-op `import_raw_data`. Then
+`append_columns` tried
+`self.data[['Cat - Main', ..., 'Details']] = self.data.apply(categories)`
+on an empty DataFrame. pandas 2.x's `apply` returns no columns for an
+empty input, and assigning a 0-column value to a 4-key column list
+raises `ValueError: Columns must be same length as key`.
+
+Solution: short-circuit `append_columns` when `self.data.empty` and
+insert empty Series for the expected output columns. The preprocessed
+CSV ends up header-only — clean no-op that downstream `db/migrate.py`
+ingests as 0 rows. Without this, a user with `data/real/raw/` empty
+would have hit a cryptic pandas error instead of seeing "Inserted 0
+rows."
+
+### Path layout — why not legacy tmp_data
+
+The legacy script used `$BUDGET_DATA_DIR/tmp_data/` for both inputs
+AND intermediate outputs. "tmp_data" was a misnomer — those inputs
+are the user's actual bank exports, not temporary anything.
+
+C1 split this into `raw/` (inputs the user drops in) and
+`preprocessed/` (output the pipeline writes). Each directory's name
+matches its job; cleanup after a failed run is obvious; the dormant
+Excel-writer path keeps writing `<root>/budget.xlsx` unchanged for
+the future follow-up.
+
+This is the kind of structural decision that's effectively free at
+C1 time and gets expensive to renegotiate later — if the next
+contributor adds a `--with-excel` toggle, they don't have to
+backtrack to fix path conventions.
+
+### Test coverage
+
+7 new deterministic tests (`tests/test_budget_importer.py` + one
+`--raw` end-to-end case in `tests/test_migrate.py`). Coverage focuses
+on the current_account + amex paths because their CSV schemas are
+trivial to fixture-write. Barclaycard (Credit/Debit split + month
+abbreviations needing regex replace) and Sainsbury (ISO-8859-1, no
+header) were exercised end-to-end manually but lack pytest fixtures.
+Worth adding when those exports surface a real bug.
+
+The `budget_root` fixture sets `BUDGET_DATA_DIR` via `monkeypatch.setenv`
+and calls `rule_lookup.reset_connection()` in setup + teardown to
+prevent the module-level `_conn` from carrying stale state across
+tests. Pattern lifted from how `tests/test_classification.py` already
+manages this.
+
+### Cost
+
+C1 edit: ~1.5 hours of model time. Zero API costs. 7 new tests
+(~3s extra). End-to-end smoke against a 4-row fixture: 0.5s in the
+container. Agent suite now 116 tests in ~64s.
+
+### Decisions I'd revisit
+
+**`update_excel_budget` left dormant.** The Excel writer is real,
+working code (modulo the `_append`/openpyxl-import dependencies).
+Splitting it into a separate `--with-excel` follow-up is the smallest-
+useful-thing call. The alternative — ripping the Excel path out
+entirely now — would be premature; the user's existing workflow may
+still want it.
+
+**Conditional default `args.source = "real"` only when `--source`
+wasn't passed.** When `--raw` is used, source defaults to `'real'`
+unless overridden. Cleaner than re-asking the user every invocation,
+and `--source synthetic` is still a (weird) escape hatch.
