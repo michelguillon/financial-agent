@@ -1,9 +1,10 @@
 """rules_seed.py — the canonical seed list for classification_rules.
 
 A1 (Phase 2 SPEC §3.4) migrated the hardcoded chain in
-bank_statement_parser.py:categories() into rows of this list. db/seed_rules.py
-walks RULES_SEED and inserts rows into the classification_rules table in
-order — first match wins (lower id = earlier insertion).
+`bank_statement_parser.py:categories()` (now `classifier/budget_importer.py`
+after B3) into rows of this list. `db/seed_rules.py` walks `RULES_SEED` and
+inserts rows into the `classification_rules` table in order — first match
+wins (lower id = earlier insertion).
 
 Each entry is a dict with these keys:
     pattern       (str, required): Python regex, applied case-insensitively

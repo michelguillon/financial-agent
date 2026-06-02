@@ -1835,3 +1835,108 @@ Realised cost on the actual API: 50% off Haiku — so a 100-memo bulk
 classify costs about $0.05 instead of $0.10. 8 new agent-side tests +
 1 agent prompt test + 1 admin-stats shape extension. Full agent suite
 is now 109 tests in ~57s; web suite stays at 21 tests in ~21s.
+
+---
+
+## B3 — slim down bank_statement_parser.py
+
+### Goal
+
+`classifier/bank_statement_parser.py` was the original 743-line script
+copied from the private repo. A1 had already deleted its `categories()`
+function; what remained was the `Budget` class — a raw-CSV combiner
+plus an Excel-writer using `openpyxl`. The file name implied "parser"
+but the active classifier path lives in `rule_lookup.py` post-A1. B3
+makes the filename honest and the layout truthful, prerequisite to C1
+(real-data ingestion CLI).
+
+### What shipped
+
+`git mv classifier/bank_statement_parser.py classifier/budget_importer.py`.
+Rewrote the top docstring to describe what the file actually does today
+(legacy ingest pipeline + Excel writer, openpyxl-dependent, dormant
+until C1). Updated active doc references in README, CLAUDE.md, SPEC §7
++ §9, `.env.example`, and a handful of comment-level mentions in
+sibling source files. Historical references in LEARNINGS and SPEC §3.4
+kept verbatim — those describe past state, and rewriting the
+methodology log to look retroactively consistent would defeat its
+purpose. The full deterministic agent suite still ran clean (109/109);
+no code imports the file, so the rename was zero-risk.
+
+### Methodology that worked
+
+**Grep first, design second.** The original B3 framing in the backlog
+described "reducing the agent's dependency footprint" by separating the
+`Budget` class out of the classifier path. Twenty seconds of `grep -r
+bank_statement_parser` showed the file is imported precisely
+**nowhere** in the repo. That collapsed the design space: there's no
+import path to slim, no dependency to drop, no `__init__.py` re-export
+to maintain. The task became "rename for accuracy + update docs," a
+~40-min mechanical pass instead of a half-day refactor.
+
+**Active vs historical doc references.** Mid-task I caught myself
+about to find-and-replace `bank_statement_parser` across every
+LEARNINGS entry. Resisted it. The rule that fell out:
+
+- *Active* references (README layout, SPEC §7 tree, CLAUDE.md "Project
+  shape") describe the *current* state. Always update.
+- *Historical* references (LEARNINGS sections like "A1 migrated the
+  chain from `bank_statement_parser.py`") describe what was true *at
+  the time*. Keep verbatim.
+
+A methodology log that gets retconned on every rename is no longer a
+log. The one concession: a single explicit "renamed to
+`budget_importer.py` in B3" footnote at the top of SPEC §9's redaction
+section, which is the most likely landing page for a confused reader.
+
+**`git mv`, not delete-and-create.** Standard hygiene but worth noting
+for the next refactor — `git log --follow classifier/budget_importer.py`
+still walks back through the original commits. If I'd just done a
+`Remove + Write`, the file would have looked like a 743-line drop on
+the diff and the history would have been disconnected.
+
+### Surprises
+
+**Zero importers.** I expected `bank_statement_parser` to be wired up
+in at least a smoke test or an `__init__.py` re-export. It wasn't —
+the file had been entirely dead since the A1 migration, just sitting
+there as preserved private-repo code. The backlog's framing ("reduce
+the agent's dependency footprint") was already obsolete; the real
+value of B3 was discoverability and accuracy, not runtime.
+
+**`openpyxl` isn't in `requirements.txt` and never was.** The original
+file imports `openpyxl` inside the `update_excel_budget` method but the
+project never declared it. The `Budget` class can't run today inside
+the Docker image. That's been the silent truth since the initial
+redaction commit. Documented it in the new docstring so the next
+reader doesn't have to debug. C1 is the right place to add the
+dependency alongside the rest of the ingestion plumbing.
+
+**`__main__` block carries over for free.** Running `python -m
+classifier.budget_importer --help` still works after the rename
+(argparse parses, then ImportError on openpyxl). The legacy CLI is
+preserved verbatim — anyone with the original incantation cached
+gets a clean failure mode ("No module named
+classifier.bank_statement_parser"), not a silent break.
+
+### Decisions I'd revisit
+
+**No `__init__.py` shim.** A one-line `from classifier.budget_importer
+import *` at `classifier/bank_statement_parser.py` would preserve any
+notebook or sibling-repo invocations. Skipped it because nothing
+external is known to reference the file. If a stale notebook surfaces
+months from now, add the shim then — the marginal benefit doesn't
+justify the permanent indirection today.
+
+**Helpers stayed at module level.** The four module-level helpers
+(`process_amount_sainsbury` et al.) are called from inside `Budget`
+methods via `df.apply()`. They could become static methods of `Budget`
+for tighter cohesion. Decided against — they're tiny, they work, and
+restructuring is C1 territory if C1 ends up rewriting the class
+altogether.
+
+### Cost
+
+B3 edit: ~40 minutes of model time. Zero API costs. Zero new tests
+(no code path to cover). Zero runtime changes — agent suite still 109
+tests in ~57s, web suite still 21 in ~21s.

@@ -6,7 +6,7 @@ Accepts already-categorised CSVs in either of two formats:
      date,account_number,amount,type,memo,account_currency,account_type,
      account_name,category_main,category_sub,category_sub2,details,data_source
 
-  2. Real preprocessed (Title Case, from bank_statement_parser.py output)
+  2. Real preprocessed (Title Case, from classifier/budget_importer.py output)
      Date,Account Number,Amount,Type,Memo,Account Currency,Account Type,
      Account Name,Category - Main,Category - Sub,Category - Sub2,Details
 
@@ -73,7 +73,7 @@ def detect_format(header: list[str]) -> str:
     raise ValueError(
         f"Unrecognised CSV header. Got: {header}\n"
         "Expected either the synthetic lowercase schema or the "
-        "bank_statement_parser preprocessed Title-Case schema."
+        "budget_importer preprocessed Title-Case schema."
     )
 
 

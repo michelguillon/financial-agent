@@ -33,11 +33,8 @@ Shipped: 47 deterministic tests in ~8s + 2 `@pytest.mark.llm` tests gated by `RU
 
 **Residual:** scripted-conversation pytest fixture for prompt-regression catching against mock responses (no LLM cost). Phase 3 territory.
 
-### B3 — Slim down `classifier/bank_statement_parser.py`
-**What.** Split the preserved `Budget` class (Excel import, raw-CSV combining, the Phase-4 incremental Excel methods) out into its own module — `classifier/budget_importer.py` maybe. The agent's classification path then only needs `pandas` and `re`, not `openpyxl` and `python-dotenv`.
-**Why.** Flagged as tech debt in [LEARNINGS — Step 3 surprises](LEARNINGS.md#step-3--rule-lookup-wrapper) ("if __name__ == \"__main__\":` blocks survive copy-paste, dependencies don't"). Reduces the agent's dependency footprint and clarifies what's "agent code" vs "legacy import pipeline".
-**Where from.** LEARNINGS Step 3.
-**Scope.** 2 hours. The split is mechanical; the only judgement call is whether to keep the Budget class importable from `classifier/__init__.py` for backward compatibility.
+### ~~B3 — Slim down `classifier/bank_statement_parser.py`~~ ✓ Done (2026-06-02)
+Shipped: file renamed to [`classifier/budget_importer.py`](../classifier/budget_importer.py) (the file had zero importers across the repo, so no compat shim was needed). Top docstring rewritten to reflect the file's actual role — legacy ingestion + Excel-writer pipeline preserved for C1, not a "categorisation engine" (that was deleted in A1). Active doc references updated (README/CLAUDE.md/SPEC §7 + §9, generator and migrate comments, .env.example). Historical references in LEARNINGS / SPEC §3.4 kept verbatim — they describe past state. No code/runtime change; agent suite stays at 109 tests in ~57s. See [LEARNINGS — B3](LEARNINGS.md#b3--slim-down-bank_statement_parserpy).
 
 ---
 
@@ -98,11 +95,11 @@ Shipped: [GET /admin/stats](../web/backend/app.py) returns a JSON snapshot of se
 
 ---
 
-## Suggested ordering (updated post-C2)
+## Suggested ordering (updated post-B3)
 
-A1, A2, A3, B1, B2, C2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
+A1, A2, A3, B1, B2, B3, C2, C4, D2 (CLI), D2's web-replay toggle, and /admin/stats are done. Of what's left:
 
-**If picking the daily-driver angle:** B3 → C1. Slim down `bank_statement_parser.py` first (mechanical), then wire the real-data ingestion pipeline. Turns this from "live demo" into "tool you actually use weekly". Pairs naturally with C2 since real-data ingests produce the fat Missing backlogs that justify async batching.
+**If picking the daily-driver angle:** C1 is now unblocked. Wire the real-data ingestion pipeline — `classifier/budget_importer.py` already has the combining + Excel-export logic; the C1 work is exposing it as a Docker-aware CLI (adapting paths to the mounted `data/real/` location, adding `openpyxl` to `requirements.txt`, end-to-end test with a real bank export). Pairs naturally with C2 since real-data ingests produce the fat Missing backlogs that justify async batching.
 
 **If picking polish:** D1 (currency display) + the B2 CI residual. Each ~1 hour.
 

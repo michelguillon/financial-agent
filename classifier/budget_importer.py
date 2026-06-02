@@ -1,21 +1,27 @@
 # -*- coding: utf-8 -*-
-"""bank_statement_parser — categorisation engine for UK bank exports.
+"""budget_importer — legacy ingestion + Excel-writer pipeline for raw bank CSVs.
 
-Copied from a private repository and redacted for public commit per
-SPEC_AGENT.md §9. Personally identifying values (account numbers, employer
-names, cleaner names, cardholder/card details, loan references, file
-paths) have been replaced with stable placeholders that match the synthetic
-data generator in data/synthetic/. The function bodies are otherwise
-unchanged.
+Combines per-account raw exports (Amex, Barclaycard, current account) into a
+single preprocessed CSV and updates a monthly Excel budget workbook. The
+per-row classification chain that used to live alongside this code was
+migrated into `classification_rules` in A1 — see `classifier/rules_seed.py`
+for the canonical rule list and `classifier/rule_lookup.py` for the lookup;
+only the import path lives here now.
 
-Phase 2 (SPEC §3.4 A1) migrated the per-row classification chain into
-the classification_rules SQLite table. See classifier/rules_seed.py for
-the canonical rule list and classifier/rule_lookup.py for the lookup.
-What remains here is the Excel-importing Budget class (legacy ingestion
-pipeline) — slated for its own module in B3.
+Requires `openpyxl` at runtime, which is NOT currently in `requirements.txt`.
+This module is preserved for C1 (real-data ingestion CLI) and is not
+exercised by the agent at runtime. Run with:
 
-Note: the legacy `Bills/utilities/phone` (Skype/landline) sub-category has
-been merged into `Mobile Phone` per SPEC §4's updated taxonomy.
+    python -m classifier.budget_importer -date YYYY_MM_DD
+
+Redaction history per SPEC §9: account numbers, employer names, cleaner
+names, cardholder/card details, loan references, file paths — all replaced
+with stable placeholders that match the synthetic data generator in
+`data/synthetic/`. The function bodies are otherwise unchanged.
+
+Renamed from `bank_statement_parser.py` in B3 (2026-06-02). The legacy
+`Bills/utilities/phone` Skype/landline sub-category was merged into
+`Mobile Phone` per SPEC §4's updated taxonomy.
 """
 import csv
 import sys

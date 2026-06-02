@@ -6,7 +6,7 @@ Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AG
 
 ## Project shape
 
-Personal finance agent: 13 tools (state, classification, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. Real-data classifier (`classifier/bank_statement_parser.py`) is a redacted copy of a private repo; synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
+Personal finance agent: 15 tools (state, classification incl. C2 batch, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. The redacted legacy ingest pipeline ([classifier/budget_importer.py](classifier/budget_importer.py)) is preserved from the private repo for C1; today's classifier path lives in [classifier/rule_lookup.py](classifier/rule_lookup.py) (SQLite-backed). The synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
 
 **Build status: Phase 1 + 7 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest, ~100 deterministic tests), C4 (web UI), D2 (transcript replay). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
 

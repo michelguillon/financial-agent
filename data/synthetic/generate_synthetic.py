@@ -2,9 +2,10 @@
 """generate_synthetic.py — Step 1 of the personal-finance-agent build sequence.
 
 Produces 15 years (2011-01-01 → 2025-12-31) of synthetic UK personal-finance
-transactions covering every category branch in the real
-`bank_statement_parser.py` classifier (mirrored here in redacted form per
-SPEC_AGENT §9).
+transactions covering every category branch in the canonical rule list at
+`classifier/rules_seed.py` (mirrored here in redacted form per SPEC_AGENT §9
+— the original chain lived in `bank_statement_parser.py`, now
+`classifier/budget_importer.py` since B3).
 
 Output: data/synthetic/transactions_synthetic.csv
 

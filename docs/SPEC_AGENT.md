@@ -607,7 +607,7 @@ personal-finance-agent/
 │   ├── migrate.py            ← CSV ingestion (handles synthetic + preprocessed formats)
 │   └── seed_rules.py         ← loads classifier/rules_seed.py into classification_rules (A1)
 ├── classifier/
-│   ├── bank_statement_parser.py   ← original script, redacted per §9; categories() removed in A1
+│   ├── budget_importer.py         ← legacy bank-CSV → Excel ingestion (redacted per §9; dormant, preserved for C1)
 │   ├── rule_lookup.py             ← SQLite-only lookup against classification_rules (post-A1)
 │   └── rules_seed.py              ← canonical seed rule list (A1)
 ├── data/
@@ -678,6 +678,8 @@ Demo URL for recruiters: loads synthetic data automatically (no real data presen
 Real data access: local network only. M720q home server. No remote access currently. SQLite file stays on the server, never in the repo.
 
 ### Redacting bank_statement_parser.py before first commit
+
+> Renamed in B3 to [`classifier/budget_importer.py`](../classifier/budget_importer.py). The redaction procedure below is retained verbatim because it documents the one-time history of how the file landed in this repo.
 
 `bank_statement_parser.py` is copied from the private repo into `classifier/`. Before committing it to the public repo, replace all personally identifying values with generic placeholders. The logic is preserved; the personal details are not.
 

@@ -1,8 +1,9 @@
 """rule_lookup.py — SQLite-backed classification lookup.
 
 A1 (Phase 2 SPEC §3.4) migrated the hardcoded chain in
-bank_statement_parser.py into the classification_rules table; this module
-is now the only path. On miss the result is "Missing" with NULL subs.
+`bank_statement_parser.py` (now `classifier/budget_importer.py` after B3)
+into the `classification_rules` table; this module is now the only path.
+On miss the result is "Missing" with NULL subs.
 
 A rule fires when:
   - its `pattern` REGEXPs the row's Memo (case-insensitive); AND

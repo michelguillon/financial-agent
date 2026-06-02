@@ -166,13 +166,15 @@ classification backlog on first run.
 Real bank data lives only on the author's local network — never in this
 repo, never on a remote.
 
-The classifier code (`bank_statement_parser.py`, copied from a private repo
-later in the build) is redacted before commit per
+The legacy importer (`budget_importer.py`, copied from a private repo and
+preserved for C1) is redacted before commit per
 [SPEC §9](docs/SPEC_AGENT.md#9-privacy-and-access-pattern): account
 numbers, employer names, cleaner names, cardholder details, and loan
 references all become generic placeholders. The synthetic generator uses
-the same placeholders, so synthetic and real data flow through identical
-classifier code paths.
+the same placeholders, so synthetic and real data flow through the same
+classifier path. (The classifier itself moved into [classifier/rules_seed.py](classifier/rules_seed.py)
++ [classifier/rule_lookup.py](classifier/rule_lookup.py) in A1; the importer
+is dormant until C1.)
 
 `.gitignore` enforces the boundary: `data/real/`, `finance.db`, `.env`,
 and `logs/` can never be staged accidentally.
@@ -210,7 +212,7 @@ financial-agent/
 │   └── frontend/                   React + Vite + Tailwind chat UI
 ├── tests/                          pytest suite — ~100 deterministic + 3 @pytest.mark.llm
 ├── classifier/
-│   ├── bank_statement_parser.py    redacted copy of the private classifier (no more hardcoded chain post-A1)
+│   ├── budget_importer.py          legacy bank-CSV → Excel ingestion pipeline (dormant; preserved for C1)
 │   ├── rule_lookup.py              SQLite-only lookup against classification_rules
 │   └── rules_seed.py               canonical seed list of ~40 rules (loaded by db/seed_rules.py)
 ├── db/
