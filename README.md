@@ -10,10 +10,12 @@ after the interview — the classifier gets smarter with each approved rule,
 and the same agent loop powers both the maintenance task and the planning
 conversations.
 
-> **Status:** Phase 1 (Steps 1–5) shipped, plus Phase 2 add-ons —
+> **Status:** Phase 1 (Steps 1–5) shipped, plus ten Phase 2 add-ons —
 > A1/A2 (rules table + taxonomy expansion), A3 (extend_taxonomy tool),
-> B1 (dispatch-layer code gate for `apply_*` tools), B2 (pytest with
-> ~100 tests), C4 (web UI), D2 (transcript replay).
+> B1 (dispatch-layer apply-gate), B2 (pytest, 109 deterministic +
+> 3 LLM-gated tests), B3 (budget_importer rename), C2 (Batch API for
+> bulk Missing, 50% Haiku discount), C4 (web UI), D2 + web-replay
+> toggle (transcript replay), /admin/stats (operator monitoring).
 > **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
 > ephemeral sessions, $0.50 per-session budget cap._
 > See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred.
@@ -67,7 +69,7 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 | 1 | Synthetic data generator (15y of UK transactions) | ✅ |
 | 2 | SQLite schema + CSV ingestion | ✅ |
 | 3 | SQLite-first rule lookup wrapper | ✅ |
-| 4 | Tool implementations (13 tools) + Docker | ✅ |
+| 4 | Tool implementations (15 tools after C2) + Docker | ✅ |
 | 5 | Agent loop (Sonnet 4.6 + Haiku 4.5 + prompt caching) | ✅ |
 
 **Phase 2 — add-ons shipped since the portfolio cut-off:**
@@ -75,9 +77,13 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 - **A1 + A2** — ~40 hardcoded rules migrated into `classification_rules`; taxonomy extended with Travel/rail/video.
 - **A3** — `extend_taxonomy` tool (paired `preview` + `apply`) so the agent can grow the taxonomy at runtime with user approval.
 - **B1** — dispatch-layer code gate that blocks `apply_*` tool calls unless conversation history shows a matching preview + user approval (regex fast-path + Haiku 4.5 fallback).
-- **B2** — pytest adoption, ~100 deterministic tests + 3 `@pytest.mark.llm` gated tests.
+- **B2** — pytest adoption, 109 deterministic agent-side tests + 21 web tests + 3 `@pytest.mark.llm` gated tests.
+- **B3** — `classifier/bank_statement_parser.py` renamed to `classifier/budget_importer.py` (the file had zero importers post-A1); accurate filename, unblocks C1.
+- **C2** — `bulk_classify_async` + `check_batch_results` route the Missing backlog through Anthropic's Batch API at 50% off. Async by design; pending batches announced cross-session.
 - **C4** — web UI (FastAPI + React + Vite + Tailwind, single Docker image, SSE streaming, per-session DB + cost cap).
 - **D2** — `python -m agent.replay <path>` re-renders a recorded transcript through the existing Renderer protocol.
+- **D2 web-replay toggle** — Live/Replay segmented control in the web header; plays a canned demo through the same SSE channel without spending the user's budget.
+- **`/admin/stats`** — operator-only JSON snapshot of session counts, demo spend, replay streams, batch counts, rate-limit rejections (gated by `ADMIN_TOKEN`).
 
 Methodology notes and surprises from each step + Phase 2 item are logged in
 [docs/LEARNINGS.md](docs/LEARNINGS.md). The aim is that the *how* of each step is

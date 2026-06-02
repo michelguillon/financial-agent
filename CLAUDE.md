@@ -8,7 +8,7 @@ Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AG
 
 Personal finance agent: 15 tools (state, classification incl. C2 batch, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. The redacted legacy ingest pipeline ([classifier/budget_importer.py](classifier/budget_importer.py)) is preserved from the private repo for C1; today's classifier path lives in [classifier/rule_lookup.py](classifier/rule_lookup.py) (SQLite-backed). The synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
 
-**Build status: Phase 1 + 7 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest, ~100 deterministic tests), C4 (web UI), D2 (transcript replay). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
+**Build status: Phase 1 + 10 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 109 agent + 21 web deterministic tests + 3 LLM-gated), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
 
 ---
 
@@ -94,7 +94,7 @@ The demo runs synthetic-data-only forever — real-data ingestion via the web is
 
 ## Verify-by-running (pytest)
 
-The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). Deterministic tests run in <10s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS.md#b2--pytest-adoption).
+The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). 109 agent-side deterministic tests run in ~60s + 21 web tests in ~25s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS.md#b2--pytest-adoption).
 
 ```powershell
 # Deterministic — no API key needed
