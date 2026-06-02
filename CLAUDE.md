@@ -8,7 +8,7 @@ Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AG
 
 Personal finance agent: 15 tools (state, classification incl. C2 batch, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. The redacted legacy ingest pipeline ([classifier/budget_importer.py](classifier/budget_importer.py)) is wired into `python -m db.migrate --raw` (C1) for real-data ingestion; today's classifier path lives in [classifier/rule_lookup.py](classifier/rule_lookup.py) (SQLite-backed). The synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
 
-**Build status: Phase 1 + 11 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 116 agent + 21 web deterministic tests + 3 LLM-gated), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C1 (real-data ingestion CLI), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
+**Build status: Phase 1 + 13 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-sequence) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 116 agent + 21 web deterministic tests + 3 LLM-gated), B2 CI (GitHub Actions on push/PR), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C1 (real-data ingestion CLI), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D1 (CLI footer shows both `$0.0058 / £0.0046`), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
 
 ---
 
@@ -52,8 +52,8 @@ Post-A2 the taxonomy lives in `classifier/rules_seed.py` (loaded into `classific
 
 ### Currency convention
 Transaction data: **£** (UK).
-API costs: **$** (Anthropic billing).
-Both appear in the CLI footer. Don't convert; be explicit which is which.
+API costs: tracked internally in **$** (Anthropic billing reality).
+CLI footer renders **both** per-turn: `$0.0058 / £0.0046` (D1, 2026-06-02). The £ side uses a hardcoded `USD_TO_GBP` constant in [agent/claude_helpers.py](agent/claude_helpers.py); refresh it when the displayed figure visibly drifts. Web UI stays $-only (recruiter-facing; the budget cap is in $).
 
 ### Redaction discipline at the data-generation layer
 The redacted classifier and the synthetic data generator share the same placeholders (`ACCOUNT_CURRENT`, `COMPANY_A`, `CLEANER_A`, `CARDHOLDER_NAME_CARDNUMBER`, `LENDER_NAME_REFERENCE`). When introducing new redactable values, update both. See [SPEC §9](docs/SPEC_AGENT.md#9-privacy-and-access-pattern).

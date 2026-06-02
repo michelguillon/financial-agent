@@ -2,9 +2,9 @@
 ## Architecture Specification
 
 **Project:** Week 2 Portfolio — AI Agents  
-**Status:** Pre-implementation (architecture agreed, no code written)  
-**Last updated:** pre-build  
-**Deployment target:** M720q home server, Ubuntu Server 24.04, local network
+**Status:** Complete — Phase 1 (Steps 1–5) + Phase 2 (A1–A3, B1–B3, C1–C2, C4, D1, D2 + follow-ups, /admin/stats, B2 CI). See [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md) for remaining nice-to-have items.  
+**Last updated:** 2026-06-02 (post-D1 + B2 CI tail)  
+**Deployment target:** M720q home server, Ubuntu Server 24.04, local network + public tunnel (C4)
 
 ---
 
@@ -20,17 +20,23 @@ Two goals, equal weight:
 
 ## 2. What This System Does
 
-**One agent, two tool groups.**
+> **How to read this document.** This file is both a design specification (§3–7 record the decisions that shaped the code) and a build record (§8–10 reflect shipped state, not the original plan). Phase 1 decisions are documented as originally written; Phase 2 additions are noted inline with their backlog reference. Where the two conflict, the code is authoritative.
 
-A single conversational agent with tools covering:
+**One agent, three tool groups, two front-ends.**
 
-1. **Classification tools** — processes the backlog of unclassified (`Missing`) transactions, suggests regex rules, routes them through human approval, persists approved rules permanently.
+A single conversational agent built around a raw Anthropic API tool-use loop, accessible via a CLI REPL and a React/FastAPI web UI:
 
-2. **Scenario tools** — answers forward-looking financial questions grounded in real transaction history. Flagship use cases:
+1. **Classification tools** — processes the backlog of unclassified (`Missing`) transactions. Suggests regex rules via Haiku 4.5, previews blast radius, routes through human approval, persists approved rules to the `classification_rules` table. Can also extend the taxonomy itself (`preview_taxonomy_extension` / `apply_taxonomy_extension`, A3). All apply-type tools are code-gated against prompt injection (B1). Bulk classification of large backlogs routes through the Anthropic Batch API at 50% discount (C2).
+
+2. **Scenario tools** — answers forward-looking financial questions grounded in real transaction history:
    - "I'm losing my job — where should I cut back?" → pulls spending by category, ranks discretionary vs fixed, gives specific £ targets
-   - "My mortgage goes from 2% to 4% in March 2027 — how does that affect my budget?" → models new payment against real income/outgoings
+   - "My mortgage goes from 2% to 4% — how does that affect my budget?" → models new payment against real income/outgoings
 
-The classification capability and the scenario capability are not separate agents. They share one agent loop, one state store, and one database. The connection: classification quality directly improves scenario accuracy.
+3. **State tools** — reads and writes the cross-session `agent_state` store. The agent calls these to persist durable facts it learns during a conversation (mortgage balance, rate change date, income source) so future sessions don't start from scratch.
+
+**Front-ends:** CLI REPL (`python -m agent`) with Rich display and JSONL session logging; React/FastAPI web UI with SSE streaming, per-session DB isolation, and a $0.50/session cost cap (C4). Operator visibility via `/admin/stats`. Sessions are replayable via `python -m agent.replay` (D2); the web UI includes a Live/Replay toggle with a curated demo transcript (D2 follow-up).
+
+The classification capability and the scenario capability are not separate agents. They share one loop, one state store, and one database. The connection: classification quality directly improves scenario accuracy.
 
 ---
 
@@ -156,7 +162,7 @@ BATCH_THRESHOLD = 10  # if more than 10 Missing transactions, use Batch API
 |------|-------|-----------|------|
 | Conversation loop | Sonnet 4.6 | Prompt caching on system + state | ~$0.05–0.10 / conversation |
 | `suggest_classification()` interactive | Haiku 4.5 | Standard | ~$0.001 / call |
-| Bulk `Missing` backlog (>10 transactions) | Haiku 4.5 | Batch API | ~$0.0005 / call |
+| Bulk `Missing` backlog via `bulk_classify_async()` | Haiku 4.5 | Batch API (C2, active) | ~$0.0005 / call |
 
 ### 3.4 — Classification engine migration: Two-phase ✓ Done (A1, 2026-05-31)
 
@@ -312,6 +318,17 @@ CREATE TABLE classification_rules (
     approved_at    DATETIME,
     created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
     times_matched  INTEGER DEFAULT 0
+);
+
+-- Async batch classification jobs (C2)
+CREATE TABLE pending_batches (
+    batch_id      TEXT PRIMARY KEY,             -- Anthropic batch ID
+    status        TEXT NOT NULL,               -- 'in_progress' | 'completed' | 'failed' | 'expired'
+    memos_json    TEXT NOT NULL,               -- JSON list of submitted memo strings
+    results_json  TEXT,                        -- JSON list of suggestion dicts (set on completion)
+    cost_usd      REAL DEFAULT 0.0,
+    submitted_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at  DATETIME
 );
 
 -- Cross-session knowledge store
@@ -606,28 +623,30 @@ personal-finance-agent/
 │   ├── replay.py             ← `python -m agent.replay <jsonl>` (D2)
 │   ├── transcript.py         ← JSONL session logger
 │   ├── __main__.py           ← REPL entry: `python -m agent`
-│   ├── claude_helpers.py     ← Anthropic client + retry + AGENT_MODEL/CLASSIFIER_MODEL
+│   ├── claude_helpers.py     ← Anthropic client + retry + AGENT_MODEL/CLASSIFIER_MODEL + batch constants (C2)
 │   ├── tool_registry.py      ← schemas + dispatch + B1 GATED_TOOLS apply-gate
 │   └── tools/
-│       ├── classification.py ← get_unclassified, suggest, preview/apply rule, preview/apply taxonomy
+│       ├── classification.py ← get_unclassified, suggest, preview/apply rule, preview/apply taxonomy, bulk_classify_async, check_batch_results (C2)
 │       ├── scenarios.py      ← spending_summary, income, fixed_vs_disc, model_scenario
-│       └── state.py          ← get/set agent_state
+│       ├── state.py          ← get/set agent_state
+│       └── _stats_sink.py    ← decoupled counter hook (C2); no-op in CLI, wired by web lifespan
 ├── web/                       ← C4
-│   ├── backend/              ← FastAPI app, per-session DB ContextVar, $0.50 cap, WebSseRenderer
-│   └── frontend/             ← React + Vite + Tailwind chat UI
-├── tests/                     ← pytest suite (B2) — ~100 deterministic + 3 @pytest.mark.llm
+│   ├── backend/              ← FastAPI app, per-session DB ContextVar, $0.50 cap, WebSseRenderer, /admin/stats
+│   ├── frontend/             ← React + Vite + Tailwind chat UI + Live/Replay toggle (D2 follow-up)
+│   └── replays/              ← bundled demo transcript(s) for web replay (D2 follow-up)
+├── tests/                     ← pytest suite (B2) — ~116 deterministic + 3 @pytest.mark.llm
 ├── db/
-│   ├── schema.sql            ← CREATE TABLE statements (incl. classification_rules)
+│   ├── schema.sql            ← CREATE TABLE statements (incl. classification_rules, pending_batches)
 │   ├── database.py           ← SQLite connection + helpers + SESSION_DB_PATH ContextVar (C4)
-│   ├── migrate.py            ← CSV ingestion (handles synthetic + preprocessed formats)
+│   ├── migrate.py            ← CSV ingestion + --raw real-data path (C1)
 │   └── seed_rules.py         ← loads classifier/rules_seed.py into classification_rules (A1)
 ├── classifier/
-│   ├── budget_importer.py         ← legacy bank-CSV → Excel ingestion (redacted per §9; dormant, preserved for C1)
+│   ├── budget_importer.py         ← legacy bank-CSV → Excel ingestion (renamed B3; dormant until --with-excel)
 │   ├── rule_lookup.py             ← SQLite-only lookup against classification_rules (post-A1)
 │   └── rules_seed.py              ← canonical seed rule list (A1)
 ├── data/
 │   ├── finance.db            ← gitignored, SQLite store
-│   ├── real/                 ← gitignored
+│   ├── real/                 ← gitignored; raw/ + preprocessed/ sub-dirs (C1)
 │   └── synthetic/
 │       ├── generate_synthetic.py
 │       └── transactions_synthetic.csv
@@ -644,36 +663,66 @@ personal-finance-agent/
 
 ---
 
-## 8. Build Sequence
+## 8. Build History
 
-This is the order of implementation. Each step produces something testable before the next begins.
+This section records the sequence in which the system was built. Phase 1 is the original portfolio build (Steps 1–5); Phase 2 is the extension work tracked as lettered backlog tickets. Each step/ticket produced something independently testable before the next began.
+
+---
+
+### Phase 1 — Core agent (Steps 1–5)
 
 **Step 1 — Synthetic data generator**
-Build `generate_synthetic.py`. Produces 15 years of realistic transactions using the known category taxonomy. Verify output looks right in SQLite before touching agent code. This is the safety net — if the real data migration breaks anything, the synthetic data still works.
+`data/synthetic/generate_synthetic.py`. 15 years of realistic UK transactions shaped to the known taxonomy. Merchant pools mirror the classifier's regexes so data round-trips cleanly. Surfaced the `Health` taxonomy gap and the float-boundary Pret bug before a line of agent code was written. See [LEARNINGS §1](LEARNINGS.md#step-1--synthetic-data-generator).
 
 **Step 2 — SQLite migration**
-Build `migrate.py`. Loads existing CSV exports into `transactions` table. Runs the existing `categories()` function to populate category columns. Validates: spot-check categorisation quality, count `Missing` rows, verify date range.
+`db/migrate.py`. Auto-detects CSV format from headers, ingests into `transactions`, emits a validation epilogue. Idempotent via `--replace` scoped to `data_source`. Extended in C1 to handle `--raw` real-data ingestion. See [LEARNINGS §2](LEARNINGS.md#step-2--sqlite-migration).
 
 **Step 3 — Rule lookup wrapper**
-Build `rule_lookup.py`. Adds the SQLite-first lookup to `categories()`. Write one test rule manually, verify it takes precedence over the hardcoded chain. This is the foundation Agent 1 builds on. _(Post-A1: the hardcoded fallback chain has been removed; `rule_lookup.py` is now the only path. See [LEARNINGS — A1 + A2](LEARNINGS.md#a1--a2--rules-into-table--taxonomy-expansion).)_
+`classifier/rule_lookup.py`. SQLite-first lookup wrapping the hardcoded `categories()` chain as Phase 1 fallback. Phase 2 (A1) removed the hardcoded chain entirely. See [LEARNINGS §3](LEARNINGS.md#step-3--rule-lookup-wrapper).
 
 **Step 4 — Tool implementations**
-Build all tool functions. Test each independently with direct function calls before plugging into the agent loop. No agent loop yet.
+All tool functions, tool registry, `claude_helpers.py`, Docker container. Co-located JSON schemas, two-step destructive operations (preview → apply), inline smoke tests. See [LEARNINGS §4](LEARNINGS.md#step-4--tool-implementations--docker).
 
 **Step 5 — Agent loop**
-Build `agent.py`. Wire tools to the loop. Test with synthetic data first, then real data.
+`agent/agent.py` + `cli.py` + `transcript.py`. Renderer protocol separates display from logic. Prompt caching on system + state blocks. End-to-end test surfaced the rate/decimal bug in `model_scenario`. See [LEARNINGS §5](LEARNINGS.md#step-5--agent-loop).
 
-**Step 6 — Web UI ✓ Done (C4, 2026-05-31)**
+---
 
-Shipped: React + Vite + Tailwind frontend served by a FastAPI backend; single Docker image (multi-stage Node→Python). SSE for streaming agent events (one event per Renderer callback). Three new concerns the CLI never had drove most of the work:
+### Phase 2 — Hardening and extension
 
-- **Per-session isolation** — each visitor gets a `shutil.copy` of the seed SQLite DB under `/tmp/agent-sessions/<id>/`. Threaded through the agent tools via the `SESSION_DB_PATH` ContextVar in [db/database.py](../db/database.py); propagates across `asyncio.to_thread` automatically (Python 3.10+).
-- **Cost defense** — per-session $0.50 hard cap (enforced before each turn via [web/backend/limits.py](../web/backend/limits.py)); per-IP 3-sessions/24h rate limit. Anthropic API key stays server-side.
-- **Streaming** — `WebSseRenderer` ([web/backend/streaming.py](../web/backend/streaming.py)) implements the existing Renderer protocol but pushes events into an `asyncio.Queue` via `loop.call_soon_threadsafe`, since `run_turn` is synchronous and runs in a worker thread.
+**B2 — pytest** ✓ Done 2026-05-31 · 47→116 deterministic tests, session-scoped seed DB fixture, LLM marker.
 
-Deployment shape: single image, served behind a tunnel (Cloudflare Tunnel or equivalent) that terminates HTTPS and sets `X-Forwarded-For`. See [LEARNINGS — C4](LEARNINGS.md#c4--web-ui) for the threading details and what got cut to ship.
+**A1/A2 — Rules into table + taxonomy expansion** ✓ Done 2026-05-31 · ~45 rules migrated to `classification_rules`; hardcoded chain deleted; `Travel/accommodation`, `Transport/rail`, `Leisure/subscription/video` added. `test_round_trip.py` is the regression net.
 
-**Phase 2 add-ons beyond Step 6.** A1+A2 (rules into table + taxonomy expansion), A3 (extend_taxonomy tool), B1 (dispatch-layer apply-gate), B2 (pytest adoption), and D2 (transcript replay) all shipped under their backlog letter codes after Step 6. Each has a corresponding section in [LEARNINGS.md](LEARNINGS.md); status and scope live in [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md).
+**A3 — `extend_taxonomy` tool** ✓ Done 2026-05-31 · `preview_taxonomy_extension` / `apply_taxonomy_extension` pair; validates tuple is unprecedented and matches ≥1 Missing row.
+
+**C4 — Web UI** ✓ Done 2026-05-31 · React + FastAPI + SSE, multi-stage Docker image, per-session DB isolation via `SESSION_DB_PATH` ContextVar, $0.50 cost cap + per-IP rate limit.
+
+**B1 — Code gate** ✓ Done 2026-06-01 · `GATED_TOOLS` in `tool_registry.py`; `check_approval()` walks session history; regex fast-path + Haiku fallback; `ApprovalRequiredError` → `is_error` tool_result.
+
+**D2 — Transcript replay + web toggle** ✓ Done 2026-06-01 · `python -m agent.replay` CLI + `show_user_text` Renderer extension; web Live/Replay toggle with bundled `demo_3turn.jsonl`; replay bypasses cost cap by design.
+
+**/admin/stats** ✓ Done 2026-06-01 · `Stats` dataclass on `app.state`; `X-Admin-Token` header auth; 503 when unset; session/spend/replay/rate-limit counters.
+
+**C2 — Batch API** ✓ Done 2026-06-01 · `bulk_classify_async` + `check_batch_results` tools; `pending_batches` table; `_stats_sink` indirection keeps agent tools FastAPI-free; 50% cost discount on bulk runs.
+
+**B3 — Rename `bank_statement_parser.py`** ✓ Done 2026-06-02 · `git mv` to `budget_importer.py`; docstring rewritten; active doc references updated; historical LEARNINGS references kept verbatim.
+
+**C1 — Real-data ingestion** ✓ Done 2026-06-02 · `python -m db.migrate --raw YYYY_MM_DD`; `raw/` + `preprocessed/` layout under `$BUDGET_DATA_DIR`; three latent bugs fixed in `budget_importer.py`; `SESSION_DB_PATH` reused for `--db` isolation.
+
+**D1 — Currency display** ✓ Done 2026-06-02 · CLI footer renders `$0.0058 / £0.0046` using the `USD_TO_GBP = 0.79` constant in `agent/claude_helpers.py`. Web UI stays $-only (budget cap is in $).
+
+**B2 CI residual** ✓ Done 2026-06-02 · `.github/workflows/test.yml` runs `docker compose run --rm -T agent pytest -m "not llm" --ignore=tests/test_web.py` on push and PR to `main`. No `ANTHROPIC_API_KEY` secret needed — the gated path was B2's whole point.
+
+---
+
+### Phase 3 — Nice-to-have (not planned)
+
+Remaining backlog items are documented in [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md). None are critical for the portfolio or daily-driver use case.
+
+---
+
+## 9. Privacy and Access Pattern
 
 ---
 
@@ -763,11 +812,21 @@ budget_data_dir = os.environ.get('BUDGET_DATA_DIR', './data')
 
 ---
 
-## 10. Out of Scope (this build)
+## 10. Out of Scope
 
-- Authentication / user accounts
-- Remote access to real data
-- Phase 2 rule migration (hardcoded chain → SQLite)
-- Multi-user support
-- Push notifications / scheduled analysis
-- React UI (CLI demo sufficient for Week 2)
+**Shipped in Phase 2 (no longer out of scope):**
+Phase 2 rule migration (A1), React UI (C4), code gate (B1), pytest (B2 + CI residual), taxonomy expansion (A2/A3), transcript replay (D2), web replay toggle, /admin/stats, Batch API (C2), real-data ingestion (C1), `budget_importer.py` rename (B3), currency display (D1).
+
+**Nice-to-have, not planned:**
+- C3 — conversation history summarisation (not needed while $0.50 cap bounds sessions)
+- D3 — `--resume <session_id>` flag
+- `--with-excel` toggle on `--raw` ingestion (calls dormant `update_excel_budget()`)
+- Barclaycard/Sainsbury fixture coverage in test suite
+- Web multi-demo picker, HTML transcript export
+
+**Permanently out of scope by design:**
+- Authentication / user accounts — demo is ephemeral; real data sits behind local network
+- Multi-user support — single-user personal finance tool
+- Remote access to real data — local network only
+- Replacing raw-API approach with LangGraph etc. — explicitly deferred to a future project (§3.2)
+- Rewriting in another language

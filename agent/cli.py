@@ -8,10 +8,13 @@ Implements the Renderer protocol from agent.agent. Decisions:
   still goes to the transcript.
 - Assistant text uses rich's Markdown renderer — tables, bullets, code
   fences all look right.
-- Per-turn footer shows token counts + USD cost in dim grey.
+- Per-turn footer shows token counts + cost in $ and £.
 
-The currency mix is intentional: tool results show £ (transaction
-currency), the cost footer shows $ (API billing currency).
+Tool results show £ (transaction currency, no conversion). The cost
+footer renders $ (Anthropic billing reality) AND £ (a translation
+using `USD_TO_GBP` in `agent.claude_helpers` — fixed constant, refreshed
+periodically). D1 (2026-06-02) added the £ side so the mental-tax of
+mixed currencies in one view drops to near zero.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.text import Text
+
+from agent.claude_helpers import USD_TO_GBP
 
 
 # A few colour choices, kept in one place.
@@ -92,7 +97,7 @@ class RichRenderer:
         ]
         if cache_creation:
             parts.append(f"cache_create {cache_creation:,}")
-        parts.append(f"${cost_usd:.4f}")
+        parts.append(f"${cost_usd:.4f} / £{cost_usd * USD_TO_GBP:.4f}")
         parts.append(f"turn {turn}")
         self.console.print(f"[{' · '.join(parts)}]", style=STYLE_FOOTER)
         self.console.print()  # blank line between turns

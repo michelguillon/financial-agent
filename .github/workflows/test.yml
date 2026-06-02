@@ -1,0 +1,45 @@
+# Deterministic agent test suite — runs on every push + PR to main.
+#
+# Why this shape:
+#   - Docker is the project's only supported toolchain (CLAUDE.md: "do not
+#     `pip install` on the host"), so CI mirrors the developer workflow
+#     exactly: `docker compose build agent` then run pytest inside.
+#   - `pytest -m "not llm"` skips the three @pytest.mark.llm cases that
+#     would need ANTHROPIC_API_KEY. The gated path is the whole point of
+#     B2 — we get coverage on 116 deterministic tests with zero secrets.
+#   - The web suite (tests/test_web.py) is intentionally excluded; it
+#     needs the multi-stage web image, which roughly doubles build time
+#     for tests that haven't been flaky. Re-enable here if that changes.
+#   - No build cache: simpler workflow, ~2-3 min total on Ubuntu runners.
+#     Add `docker/build-push-action` with a registry cache later if CI
+#     time becomes a problem.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (agent suite, llm-gated tests skipped)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build agent image
+        run: docker compose build agent
+
+      - name: Run deterministic pytest
+        # -T disables tty allocation. docker-compose.yml sets `tty: true`
+        # for interactive local use; CI runners have no tty and would
+        # otherwise fail with "the input device is not a TTY".
+        run: |
+          docker compose run --rm -T agent \
+            pytest -m "not llm" --ignore=tests/test_web.py

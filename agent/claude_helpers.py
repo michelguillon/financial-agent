@@ -46,6 +46,14 @@ HAIKU_PRICE_OUTPUT = 5.0 / 1_000_000
 # Anthropic Batch API discount applied to both input and output rates.
 BATCH_DISCOUNT = 0.5
 
+# D1 (2026-06-02): the CLI footer renders per-turn API cost in both $
+# (Anthropic billing reality) and £ (project currency). Conversion uses
+# a hardcoded approximate FX so the demo stays offline and deterministic.
+# Last sourced: 2026-06-02 (≈ £1 = $1.27). Refresh this constant the next
+# time you notice the displayed £ figure drifting from reality; nothing
+# in the codebase depends on it being current to the day.
+USD_TO_GBP = 0.79
+
 
 # ---------------------------------------------------------------------------
 # Client

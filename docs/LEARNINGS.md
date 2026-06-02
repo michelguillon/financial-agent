@@ -1,10 +1,10 @@
 # Learnings — Personal Finance Agent
 
 A running log of methodology and surprises from building the agent.
-One entry per build step (see SPEC_AGENT.md §8).
 
-The goal of this doc is the methodology — not the answers. If a future
-project hits a similar problem, what here would help?
+**Phase 1 (Steps 1–5)** covers the original portfolio build — synthetic data, migration, classifier, tools, and the agent loop. **Phase 2 (A\*/B\*/C\*/D\* tickets)** covers the hardening and extension work that followed: rules into the DB, pytest, web UI, taxonomy expansion, code gate, Batch API, real-data ingestion, and transcript replay.
+
+The goal of this doc is the methodology — not the answers. If a future project hits a similar problem, what here would help?
 
 ---
 
@@ -599,9 +599,28 @@ iteration into a single user message before the next API call.
 
 ---
 
-## Cross-cutting decisions (continued)
+## Phase 1 — What shipped
 
-### What the transcript log records — and what it doesn't
+*Five steps, roughly three weeks of build time.*
+
+| Component | What it is |
+|-----------|------------|
+| `data/synthetic/generate_synthetic.py` | 15 years of realistic UK transactions, classifier-shaped |
+| `db/migrate.py` | CSV ingestion into SQLite, format auto-detection, idempotent |
+| `classifier/rule_lookup.py` | SQLite-first lookup (hardcoded chain as Phase 1 fallback; removed A1) |
+| `agent/tools/` | 11 tools: 6 classification, 4 scenario, 2 state (grew to 13 post-A3 + 15 post-C2) |
+| `agent/agent.py` + `cli.py` + `transcript.py` | Renderer-protocol loop, Rich display, JSONL logging |
+| `Dockerfile` + `docker-compose.yml` | python:3.13-slim, non-root, data/ + logs/ bind mounts |
+
+**What worked from the original spec:** model routing (Sonnet + Haiku), prompt caching, hybrid session/cross-session memory, preview-before-apply pattern, JSONL transcript format, `data_source` column for demo/real switch.
+
+**What changed vs the original spec:** the hardcoded fallback chain was always meant to be temporary (A1 removed it). The Renderer protocol wasn't in the original spec — it emerged during Step 5 and became the load-bearing abstraction for every subsequent front-end.
+
+---
+
+## Retrospective — cross-cutting observations from Phase 1
+
+*These insights emerged from the first live production session, after Step 5 was complete. They require the agent loop to already exist to make sense.*
 
 **The observation:** reading a transcript entry like this one —
 
@@ -628,11 +647,14 @@ client.messages.create(
 
 The transcript records only the `messages` array — the evolving
 conversation. The `system` parameter (system prompt + agent state
-snapshot) and the `tools` parameter (full JSON schema of all 11
+snapshot) and the `tools` parameter (full JSON schema of all 13+
 tools) are sent on every single API call but are never written to the
-log because they don't change turn-to-turn. Logging them per turn
-would make the transcript enormous and unreadable with no debugging
-benefit.
+log because they are structural inputs to the API call, not
+conversation events. The system prompt is static per session; the
+agent_state snapshot can change between turns (any `set_agent_state`
+call updates it for the next turn). Neither belongs in the per-event
+log — the right place to inspect them is the codebase
+(`build_system_prompt`, `agent_state` table), not the transcript.
 
 **The `cache_read` tokens are the evidence they were sent:**
 In the `usage` line for turn 1 of the mortgage session:
@@ -741,6 +763,21 @@ next optimisation.
 scenario conversation with five tool calls, two model hops (Sonnet for
 the loop, implicit), and three state writes. That's the cost of running
 this as a real personal finance tool.
+
+---
+
+## Phase 2 — Hardening and extension
+
+*Ten tickets shipped: B2, A1, A2, A3, C4, B1, D2, D2-followup, /admin/stats, C2, B3, C1.*
+
+**Phase 2 goal:** make Phase 1 production-quality and extend its capabilities across three tracks:
+- **A\*** — migrate rules from Python to SQLite, expand the taxonomy, give the agent a tool to grow it further
+- **B\*/D\*** — pytest suite, dispatch-layer code gate, transcript replay and web toggle
+- **C\*** — web UI, operator stats, Batch API cost lever, real-data ingestion
+
+### Phase 2 naming convention
+
+Letters encode the track: **A\*** classifier · **B\*** hardening/testing · **C\*** production capabilities · **D\*** developer experience. Tickets shipped in dependency order, not letter order (C4 before B1 because the public URL made B1 urgent).
 
 ---
 
@@ -2088,3 +2125,105 @@ still want it.
 wasn't passed.** When `--raw` is used, source defaults to `'real'`
 unless overridden. Cleaner than re-asking the user every invocation,
 and `--source synthetic` is still a (weird) escape hatch.
+
+---
+
+## Phase 2 — What shipped
+
+| Ticket | What it is | Key learning |
+|--------|------------|--------------|
+| B2 | pytest suite — 47→116 deterministic tests | Session-scoped seed + per-test copy is the right SQLite fixture shape |
+| A1 | Rules into `classification_rules`; hardcoded chain deleted | `re.match` not `re.search`; migration order matters; round-trip verifier as regression net |
+| A2 | Taxonomy expansion (Travel, rail, video) | "what stays Missing" is a conscious choice, not a gap |
+| A3 | `extend_taxonomy` preview/apply pair | Thin wrapper; reject-at-preview keeps taxonomy grounded in actual data |
+| C4 | React + FastAPI web UI, SSE, per-session DB, cost cap | Renderer protocol from Step 5 was the load-bearing abstraction; ContextVar + `call_soon_threadsafe` for sync→async bridge |
+| B1 | Dispatch-layer code gate on `apply_*` tools | Same-turn emission edge case; layered conservatism (regex → Haiku fallback); `is_error` tool_result for self-correction |
+| D2 | Transcript replay CLI + web Live/Replay toggle | Reuse the Renderer protocol; replay bypasses cost cap by design |
+| /admin/stats | Operator monitoring JSON endpoint | One struct + explicit increment methods; `Stats` on `app.state` = free test isolation |
+| C2 | Batch API for bulk Missing classification | Two tools not one; model picks the threshold; `_stats_sink` indirection avoids layer violation |
+| B3 | Rename `bank_statement_parser.py` → `budget_importer.py` | Grep first; active vs historical doc references; `git mv` preserves history |
+| C1 | Real-data ingestion CLI | B3's "zero importers" framing hid three latent bugs; `SESSION_DB_PATH` reused from C4 |
+
+**What Phase 2 validated about Phase 1 decisions:**
+- The Renderer protocol (Step 5) made C4 essentially free — zero changes to `run_turn`.
+- The preview-before-apply pattern (Step 4) made B1 a thin gate rather than a redesign.
+- The JSONL transcript format (Step 5) made D2 a one-afternoon job.
+- The `data_source` column (Step 2) made per-session DB isolation trivial for C4.
+- `SESSION_DB_PATH` (C4) solved the multi-DB problem again in C1 with no new machinery.
+
+**What Phase 2 changed about Phase 1 decisions:**
+- Testing strategy flipped at Phase 2's boundary (not Step 5 as originally planned).
+- Hardcoded chain gone (A1); `rule_lookup.py` is the only classification path.
+- Tool count: 11 (Phase 1) → 13 (post-A3) → 15 (post-C2: `bulk_classify_async` + `check_batch_results`).
+- "Prompt-instructed approval" (Phase 1 HITL) is now defence-in-depth layer 2; code gate (B1) is layer 1.
+- `BATCH_THRESHOLD = 10` as a code constant became "model picks the threshold" — agent context beats heuristics.
+
+**Remaining nice-to-have:** see [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md). The two short tail tickets — D1 (currency display) and the B2 CI residual — shipped 2026-06-02 (entry below).
+
+---
+
+## D1 + B2 CI residual — closing tail (2026-06-02)
+
+Two short tickets handled together as the project wound down.
+
+### D1 — CLI footer now renders both currencies
+
+`agent/cli.py:show_usage` previously rendered `$0.0058`; CLAUDE.md
+even codified the "don't convert; show $ for billing, £ for
+transaction data" rule. Step 5 LEARNINGS flagged the mixed currencies
+in a single view as a real mental tax. D1 trades one rule for a
+clearer principle: **don't convert silently — show both.**
+
+```
+[in 1,248 · out 187 · cache_read 12,943 · $0.0058 / £0.0046 · turn 2]
+```
+
+The `USD_TO_GBP = 0.79` constant lives in
+`agent/claude_helpers.py` next to the other pricing constants. It's
+hardcoded and approximate — the demo stays offline and deterministic,
+and the £ figure is for readability, not accounting. Refresh the
+constant when the displayed £ drifts visibly from reality. **The web
+UI stays $-only** — the budget cap is in $, the recruiter-facing
+context is $-billing-reality, and changing both would have been scope
+creep without a real reason.
+
+This is one of those cases where the "two-currency mix is confusing"
+finding sat in LEARNINGS for two weeks before being acted on. The
+change is genuinely one line in `cli.py` + a constant. Worth doing,
+worth doing late.
+
+### B2 CI residual — GitHub Actions on push/PR
+
+`.github/workflows/test.yml` runs
+`docker compose run --rm -T agent pytest -m "not llm" --ignore=tests/test_web.py`
+on every push and PR to `main`. ~2-3 min on Ubuntu runners.
+
+Three choices worth surfacing:
+
+1. **Docker-only — no separate "install deps + run pytest" path.**
+   CI mirrors the developer workflow exactly. CLAUDE.md's "do not
+   `pip install` on the host" rule means there's no second-toolchain
+   to maintain. Trade-off: image rebuild on every push (no layer
+   caching configured yet) costs ~30s vs a hypothetical 5s for
+   `pip install`. Acceptable.
+
+2. **`-T` flag.** docker-compose.yml has `tty: true` for interactive
+   local use; CI runners have no tty and would crash with "the input
+   device is not a TTY". `docker compose run -T` disables tty
+   allocation, fixing this without touching the compose file.
+
+3. **Agent suite only, web suite deferred.** test_web.py needs the
+   multi-stage web image (node + python build), roughly doubling
+   total CI time. The web backend hasn't been flaky enough to justify
+   it. Re-enable here if that changes.
+
+No `ANTHROPIC_API_KEY` secret needed in the repo — that was the whole
+point of B2's `@pytest.mark.llm` gating. CI exercises the 116
+deterministic tests; the 3 LLM-gated tests stay developer-local.
+
+### Cost
+
+Combined: ~1 hour of model time. Zero API costs. Zero new unit tests
+(test_cli.py is crash-only; the footer-format change is verified by
+eyeballing the demo block). One new file (`.github/workflows/test.yml`).
+Agent suite stays at 116 tests in ~65s.

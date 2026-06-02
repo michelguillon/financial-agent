@@ -10,13 +10,14 @@ after the interview — the classifier gets smarter with each approved rule,
 and the same agent loop powers both the maintenance task and the planning
 conversations.
 
-> **Status:** Phase 1 (Steps 1–5) shipped, plus eleven Phase 2 add-ons —
+> **Status:** Phase 1 (Steps 1–5) shipped, plus thirteen Phase 2 add-ons —
 > A1/A2 (rules table + taxonomy expansion), A3 (extend_taxonomy tool),
 > B1 (dispatch-layer apply-gate), B2 (pytest, 116 deterministic +
-> 3 LLM-gated tests), B3 (budget_importer rename), C1 (real-data
-> ingestion CLI), C2 (Batch API for bulk Missing, 50% Haiku discount),
-> C4 (web UI), D2 + web-replay toggle (transcript replay),
-> /admin/stats (operator monitoring).
+> 3 LLM-gated tests), B2 CI (GitHub Actions on push/PR), B3
+> (budget_importer rename), C1 (real-data ingestion CLI), C2 (Batch
+> API for bulk Missing, 50% Haiku discount), C4 (web UI),
+> D1 (CLI footer shows `$0.0058 / £0.0046`), D2 + web-replay toggle
+> (transcript replay), /admin/stats (operator monitoring).
 > **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
 > ephemeral sessions, $0.50 per-session budget cap._
 > See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred.
