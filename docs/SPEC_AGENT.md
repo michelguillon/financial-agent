@@ -724,10 +724,6 @@ Remaining backlog items are documented in [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.m
 
 ## 9. Privacy and Access Pattern
 
----
-
-## 9. Privacy and Access Pattern
-
 ```
 .gitignore entries (mandatory):
   data/real/

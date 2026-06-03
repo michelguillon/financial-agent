@@ -2143,6 +2143,8 @@ and `--source synthetic` is still a (weird) escape hatch.
 | C2 | Batch API for bulk Missing classification | Two tools not one; model picks the threshold; `_stats_sink` indirection avoids layer violation |
 | B3 | Rename `bank_statement_parser.py` → `budget_importer.py` | Grep first; active vs historical doc references; `git mv` preserves history |
 | C1 | Real-data ingestion CLI | B3's "zero importers" framing hid three latent bugs; `SESSION_DB_PATH` reused from C4 |
+| D1 | CLI footer renders `$0.0058 / £0.0046` | Show both, don't convert silently; web stays $-only (budget cap is in $) |
+| B2 CI | `.github/workflows/test.yml` on push/PR | Docker-only CI mirrors dev workflow; `-T` flag for tty; web suite excluded until it's worth the build time |
 
 **What Phase 2 validated about Phase 1 decisions:**
 - The Renderer protocol (Step 5) made C4 essentially free — zero changes to `run_turn`.
