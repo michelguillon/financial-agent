@@ -1,0 +1,41 @@
+# docker-compose.prod.yml — production overlay for the home-server stack.
+#
+# Caddy-fronted topology (see /opt/caddy/PLAYBOOK.md on the Lenovo):
+#   Cloudflare Tunnel → Caddy (:80) → reverse_proxy financial-agent-app:8000
+#
+# The base docker-compose.yml only defines the `agent` CLI service (no CMD),
+# so always target `web` explicitly when bringing this up:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build web
+#
+# This overlay fully defines the prod `web` service (it is NOT layered on top
+# of docker-compose.web.yml — that dev overlay publishes :8000 to the host,
+# which prod must not do). The only externally-reachable container is `web`;
+# it joins the shared external `caddy` network so Caddy can reach it by
+# container_name. There is no DB container (per-session SQLite lives in
+# /tmp/agent-sessions inside the container), so no `internal` network is needed.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: financial-agent-app      # Caddy targets this exact name
+    image: personal-finance-agent-web:latest
+    env_file:
+      # ANTHROPIC_API_KEY (required) + optional ADMIN_TOKEN for /admin/stats.
+      - path: .env
+        required: false
+    # Behind Caddy — drop any inherited host-port publication. `!override`
+    # (Compose 2.20+) forces replacement instead of the default sequence
+    # merge, so no 0.0.0.0:8000 binding leaks onto the LAN.
+    ports: !override []
+    networks:
+      - default
+      - caddy
+    restart: unless-stopped
+
+networks:
+  caddy:
+    external: true        # created once on the server: docker network create caddy
+  default:                # per-app, Compose-managed; declared for explicitness
