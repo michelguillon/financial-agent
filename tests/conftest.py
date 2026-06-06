@@ -1,6 +1,6 @@
 """Shared fixtures for the pytest suite.
 
-Fixture strategy (per [docs/LEARNINGS.md → Testing strategy]):
+Fixture strategy (per [docs/LEARNINGS_AGENT.md → Testing strategy]):
 - `seed_db` (session): build once from the synthetic CSV (~18k rows, ~2s).
 - `tmp_db` (function): shutil.copy the seed into tmp_path and monkey-patch
   `db.database.DB_PATH` so tools that open the DB with no arg see the copy.

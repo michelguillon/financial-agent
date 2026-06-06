@@ -2160,7 +2160,7 @@ and `--source synthetic` is still a (weird) escape hatch.
 - "Prompt-instructed approval" (Phase 1 HITL) is now defence-in-depth layer 2; code gate (B1) is layer 1.
 - `BATCH_THRESHOLD = 10` as a code constant became "model picks the threshold" — agent context beats heuristics.
 
-**Remaining nice-to-have:** see [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md). The two short tail tickets — D1 (currency display) and the B2 CI residual — shipped 2026-06-02 (entry below).
+**Remaining nice-to-have:** see [SPEC_AGENT.md §10](SPEC_AGENT.md#10-out-of-scope). The two short tail tickets — D1 (currency display) and the B2 CI residual — shipped 2026-06-02 (entry below).
 
 ---
 

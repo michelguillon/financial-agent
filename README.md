@@ -20,7 +20,7 @@ conversations.
 > (transcript replay), /admin/stats (operator monitoring).
 > **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
 > ephemeral sessions, $0.50 per-session budget cap._
-> See [docs/PHASE_2_BACKLOG.md](docs/PHASE_2_BACKLOG.md) for what's done and what's deferred.
+> See [docs/SPEC_AGENT.md §8](docs/SPEC_AGENT.md#8-build-history) for what's done and [§10](docs/SPEC_AGENT.md#10-out-of-scope) for what's deferred.
 
 ---
 
@@ -89,7 +89,7 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 - **`/admin/stats`** — operator-only JSON snapshot of session counts, demo spend, replay streams, batch counts, rate-limit rejections (gated by `ADMIN_TOKEN`).
 
 Methodology notes and surprises from each step + Phase 2 item are logged in
-[docs/LEARNINGS.md](docs/LEARNINGS.md). The aim is that the *how* of each step is
+[docs/LEARNINGS_AGENT.md](docs/LEARNINGS_AGENT.md). The aim is that the *how* of each step is
 reusable, not just the *what*.
 
 ---
@@ -215,8 +215,7 @@ financial-agent/
 ├── .env.example
 ├── docs/
 │   ├── SPEC_AGENT.md                  architecture spec
-│   ├── LEARNINGS.md                   methodology log, one entry per step + Phase 2 item
-│   ├── PHASE_2_BACKLOG.md             what's shipped vs deferred
+│   ├── LEARNINGS_AGENT.md             methodology log, one entry per step + Phase 2 item
 │   └── AGENT_ARCHITECTURE_DIAGRAMS.html (open in a browser)
 ├── agent/
 │   ├── agent.py                    conversational loop, Renderer protocol, prompt caching

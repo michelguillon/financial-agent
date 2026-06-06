@@ -2,7 +2,7 @@
 ## Architecture Specification
 
 **Project:** Week 2 Portfolio — AI Agents  
-**Status:** Complete — Phase 1 (Steps 1–5) + Phase 2 (A1–A3, B1–B3, C1–C2, C4, D1, D2 + follow-ups, /admin/stats, B2 CI). See [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md) for remaining nice-to-have items.  
+**Status:** Complete — Phase 1 (Steps 1–5) + Phase 2 (A1–A3, B1–B3, C1–C2, C4, D1, D2 + follow-ups, /admin/stats, B2 CI). See [§10 Out of Scope](#10-out-of-scope) for remaining nice-to-have items.  
 **Last updated:** 2026-06-02 (post-D1 + B2 CI tail)  
 **Deployment target:** M720q home server, Ubuntu Server 24.04, local network + public tunnel (C4)
 
@@ -147,7 +147,7 @@ Processing a backlog of `Missing` transactions is not a real-time task. The user
 
 Haiku 4.5 + Batch API = $0.50/$2.50 per million tokens — effectively negligible for personal use volumes.
 
-Shipped via two tools in [agent/tools/classification.py](../agent/tools/classification.py): `bulk_classify_async(memos)` submits to Anthropic's Batch API + persists a row in `pending_batches`; `check_batch_results(batch_id)` polls once and caches the parsed suggestions back. Cross-session UX: `build_system_prompt` reads in-progress rows and adds a one-liner to the dynamic block so the next session announces pending work. The agent decides per-turn whether to batch or use `suggest_classification`, guided by the prompt nudge in `_STATIC_PROMPT`; `BATCH_THRESHOLD = 10` stays as a documented hint. See [LEARNINGS — C2](LEARNINGS.md#c2--batch-api-for-bulk-missing-classification).
+Shipped via two tools in [agent/tools/classification.py](../agent/tools/classification.py): `bulk_classify_async(memos)` submits to Anthropic's Batch API + persists a row in `pending_batches`; `check_batch_results(batch_id)` polls once and caches the parsed suggestions back. Cross-session UX: `build_system_prompt` reads in-progress rows and adds a one-liner to the dynamic block so the next session announces pending work. The agent decides per-turn whether to batch or use `suggest_classification`, guided by the prompt nudge in `_STATIC_PROMPT`; `BATCH_THRESHOLD = 10` stays as a documented hint. See [LEARNINGS — C2](LEARNINGS_AGENT.md#c2--batch-api-for-bulk-missing-classification).
 
 ```python
 # Batch classification: use for bulk Missing transaction processing
@@ -478,7 +478,7 @@ apply_taxonomy_extension(
 ```
 Inserts the rule into `classification_rules` (`added_by='agent'`, `approved_by='human'`) and reclassifies matching Missing rows in one SQL transaction. Re-validates before mutating. Returns `{taxonomy_entry_added, rule_id, transactions_reclassified}`.
 
-**Why this is a separate tool from `apply_classification_rule`.** Both write to `classification_rules`, but `apply_taxonomy_extension` validates that the proposed `(main, sub, sub2)` tuple is unprecedented. This makes "I am growing the taxonomy" an explicit agent action distinct from "I am adding a rule for an existing category". The agent calls `list_categories` first to decide which tool applies. A3 added these tools — see [LEARNINGS — A3](LEARNINGS.md#a3--extend_taxonomy-tool).
+**Why this is a separate tool from `apply_classification_rule`.** Both write to `classification_rules`, but `apply_taxonomy_extension` validates that the proposed `(main, sub, sub2)` tuple is unprecedented. This makes "I am growing the taxonomy" an explicit agent action distinct from "I am adding a rule for an existing category". The agent calls `list_categories` first to decide which tool applies. A3 added these tools — see [LEARNINGS — A3](LEARNINGS_AGENT.md#a3--extend_taxonomy-tool).
 
 ### 5.2 Scenario Tools
 
@@ -613,7 +613,7 @@ This is enforced by prompt instruction in Phase 1, and additionally by a dispatc
 
 ## 7. System Components
 
-Current tree, reflecting Phase 1 + Phase 2 add-ons (see [PHASE_2_BACKLOG](PHASE_2_BACKLOG.md) for which items shipped under which letter code):
+Current tree, reflecting Phase 1 + Phase 2 add-ons (see [§8 Build History](#8-build-history) for which items shipped under which letter code):
 
 ```
 personal-finance-agent/
@@ -672,19 +672,19 @@ This section records the sequence in which the system was built. Phase 1 is the 
 ### Phase 1 — Core agent (Steps 1–5)
 
 **Step 1 — Synthetic data generator**
-`data/synthetic/generate_synthetic.py`. 15 years of realistic UK transactions shaped to the known taxonomy. Merchant pools mirror the classifier's regexes so data round-trips cleanly. Surfaced the `Health` taxonomy gap and the float-boundary Pret bug before a line of agent code was written. See [LEARNINGS §1](LEARNINGS.md#step-1--synthetic-data-generator).
+`data/synthetic/generate_synthetic.py`. 15 years of realistic UK transactions shaped to the known taxonomy. Merchant pools mirror the classifier's regexes so data round-trips cleanly. Surfaced the `Health` taxonomy gap and the float-boundary Pret bug before a line of agent code was written. See [LEARNINGS §1](LEARNINGS_AGENT.md#step-1--synthetic-data-generator).
 
 **Step 2 — SQLite migration**
-`db/migrate.py`. Auto-detects CSV format from headers, ingests into `transactions`, emits a validation epilogue. Idempotent via `--replace` scoped to `data_source`. Extended in C1 to handle `--raw` real-data ingestion. See [LEARNINGS §2](LEARNINGS.md#step-2--sqlite-migration).
+`db/migrate.py`. Auto-detects CSV format from headers, ingests into `transactions`, emits a validation epilogue. Idempotent via `--replace` scoped to `data_source`. Extended in C1 to handle `--raw` real-data ingestion. See [LEARNINGS §2](LEARNINGS_AGENT.md#step-2--sqlite-migration).
 
 **Step 3 — Rule lookup wrapper**
-`classifier/rule_lookup.py`. SQLite-first lookup wrapping the hardcoded `categories()` chain as Phase 1 fallback. Phase 2 (A1) removed the hardcoded chain entirely. See [LEARNINGS §3](LEARNINGS.md#step-3--rule-lookup-wrapper).
+`classifier/rule_lookup.py`. SQLite-first lookup wrapping the hardcoded `categories()` chain as Phase 1 fallback. Phase 2 (A1) removed the hardcoded chain entirely. See [LEARNINGS §3](LEARNINGS_AGENT.md#step-3--rule-lookup-wrapper).
 
 **Step 4 — Tool implementations**
-All tool functions, tool registry, `claude_helpers.py`, Docker container. Co-located JSON schemas, two-step destructive operations (preview → apply), inline smoke tests. See [LEARNINGS §4](LEARNINGS.md#step-4--tool-implementations--docker).
+All tool functions, tool registry, `claude_helpers.py`, Docker container. Co-located JSON schemas, two-step destructive operations (preview → apply), inline smoke tests. See [LEARNINGS §4](LEARNINGS_AGENT.md#step-4--tool-implementations--docker).
 
 **Step 5 — Agent loop**
-`agent/agent.py` + `cli.py` + `transcript.py`. Renderer protocol separates display from logic. Prompt caching on system + state blocks. End-to-end test surfaced the rate/decimal bug in `model_scenario`. See [LEARNINGS §5](LEARNINGS.md#step-5--agent-loop).
+`agent/agent.py` + `cli.py` + `transcript.py`. Renderer protocol separates display from logic. Prompt caching on system + state blocks. End-to-end test surfaced the rate/decimal bug in `model_scenario`. See [LEARNINGS §5](LEARNINGS_AGENT.md#step-5--agent-loop).
 
 ---
 
@@ -718,7 +718,7 @@ All tool functions, tool registry, `claude_helpers.py`, Docker container. Co-loc
 
 ### Phase 3 — Nice-to-have (not planned)
 
-Remaining backlog items are documented in [PHASE_2_BACKLOG.md](PHASE_2_BACKLOG.md). None are critical for the portfolio or daily-driver use case.
+See [§10 Out of Scope](#10-out-of-scope) for the itemised list with rough effort estimates. None are critical for the portfolio or daily-driver use case.
 
 ---
 
@@ -813,12 +813,12 @@ budget_data_dir = os.environ.get('BUDGET_DATA_DIR', './data')
 **Shipped in Phase 2 (no longer out of scope):**
 Phase 2 rule migration (A1), React UI (C4), code gate (B1), pytest (B2 + CI residual), taxonomy expansion (A2/A3), transcript replay (D2), web replay toggle, /admin/stats, Batch API (C2), real-data ingestion (C1), `budget_importer.py` rename (B3), currency display (D1).
 
-**Nice-to-have, not planned:**
-- C3 — conversation history summarisation (not needed while $0.50 cap bounds sessions)
-- D3 — `--resume <session_id>` flag
-- `--with-excel` toggle on `--raw` ingestion (calls dormant `update_excel_budget()`)
-- Barclaycard/Sainsbury fixture coverage in test suite
-- Web multi-demo picker, HTML transcript export
+**Nice-to-have, not planned** (rough effort estimates; revisit only if a specific need arises):
+- C3 — conversation-history summarisation: once a session exceeds N turns, summarise older turns into `agent_state` and drop them from the messages array. Not needed while the $0.50 web cap bounds context growth; only worth doing if the cap is raised or D3 lands. ~1 day.
+- D3 — `--resume <session_id>` flag: reload the last messages array from a transcript and continue. ~half-day.
+- `--with-excel` toggle on `--raw` ingestion: calls the dormant `update_excel_budget()` and adds `openpyxl` to requirements. ~half-day; only useful if `budget.xlsx` is still maintained.
+- Barclaycard/Sainsbury fixture coverage in the test suite: add when those parser paths surface a real bug.
+- Web multi-demo picker (add entries to `REPLAY_CATALOGUE`) and HTML transcript export (`--html out.html`): both are content/path additions, not core code.
 
 **Permanently out of scope by design:**
 - Authentication / user accounts — demo is ephemeral; real data sits behind local network
