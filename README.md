@@ -214,9 +214,11 @@ financial-agent/
 ├── requirements.txt                anthropic, python-dotenv, pandas, rich, fastapi (web), …
 ├── .env.example
 ├── docs/
-│   ├── AGENT_SPEC.md                  architecture spec
+│   ├── AGENT_SPEC.md                  architecture spec (§8 build history, §10 backlog)
 │   ├── AGENT_LEARNINGS.md             methodology log, one entry per step + Phase 2 item
-│   └── AGENT_ARCHITECTURE.html (open in a browser)
+│   ├── AGENT_RETROSPECTIVE.md         project retrospective — what I set out to build vs what I built
+│   ├── AGENT_TOP10_LEARNINGS.md       interview talking points distilled from the project
+│   └── AGENT_ARCHITECTURE.html        architecture diagrams (open in a browser)
 ├── agent/
 │   ├── agent.py                    conversational loop, Renderer protocol, prompt caching
 │   ├── cli.py                      RichRenderer (terminal display layer)

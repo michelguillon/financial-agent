@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Conventions and gotchas for this project. Read [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md) for the architecture and [docs/AGENT_LEARNINGS.md](docs/AGENT_LEARNINGS.md) for the methodology log behind each decision.
+Conventions and gotchas for this project. Read [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md) for the architecture and [docs/AGENT_LEARNINGS.md](docs/AGENT_LEARNINGS.md) for the methodology log behind each decision. Background (non-operational): [docs/AGENT_RETROSPECTIVE.md](docs/AGENT_RETROSPECTIVE.md) is the project retrospective; [docs/AGENT_TOP10_LEARNINGS.md](docs/AGENT_TOP10_LEARNINGS.md) is interview talking points.
 
 ---
 

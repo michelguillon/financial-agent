@@ -1,4 +1,4 @@
-# RETROSPECTIVE_AGENT.md — Personal Finance Agent
+# AGENT_RETROSPECTIVE.md — Personal Finance Agent
 ## Project Retrospective
 
 **Michel Guillon | Week 2 AI Learning Track | Completed: 2026-06-02**
