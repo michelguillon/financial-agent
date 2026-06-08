@@ -3,13 +3,13 @@
 
 Produces 15 years (2011-01-01 → 2025-12-31) of synthetic UK personal-finance
 transactions covering every category branch in the canonical rule list at
-`classifier/rules_seed.py` (mirrored here in redacted form per SPEC_AGENT §9
+`classifier/rules_seed.py` (mirrored here in redacted form per AGENT_SPEC §9
 — the original chain lived in `bank_statement_parser.py`, now
 `classifier/budget_importer.py` since B3).
 
 Output: data/synthetic/transactions_synthetic.csv
 
-CSV columns match the `transactions` table from SPEC_AGENT §4 (no id):
+CSV columns match the `transactions` table from AGENT_SPEC §4 (no id):
     date, account_number, amount, type, memo,
     account_currency, account_type, account_name,
     category_main, category_sub, category_sub2, details,
@@ -20,7 +20,7 @@ Design notes
 * Memos are drawn from pools that match the real classifier's regexes, so
   the same `categories()` function would re-classify these rows into the same
   buckets they're already labelled with. This is what makes the dataset a
-  safety-net for the real-data path (SPEC_AGENT §8 Step 1).
+  safety-net for the real-data path (AGENT_SPEC §8 Step 1).
 * A small fraction (~5%) of variable spend uses memos the classifier won't
   match — those rows are labelled `Missing` and become the agent's
   classification backlog. They're deliberately recognisable real merchants
@@ -28,10 +28,10 @@ Design notes
 * Deterministic via fixed seed.
 * Personally identifying values are redacted (account numbers, employer
   names, cleaner names, cardholder name + card number, loan reference)
-  per SPEC_AGENT §9.
+  per AGENT_SPEC §9.
 
 Note: the real classifier has a `Health` main category (Dentist, Eyecare,
-General/Medicine, GP) which is NOT in SPEC_AGENT §4. This generator includes
+General/Medicine, GP) which is NOT in AGENT_SPEC §4. This generator includes
 Health because the safety-net property requires matching the classifier as
 it actually exists. The spec taxonomy needs updating.
 """
@@ -69,7 +69,7 @@ ACCT_AMEX = ("ACCOUNT_AMEX", "Credit Card", "Amex")
 ACCT_SAINSBURY = ("ACCOUNT_SAINSBURY", "Credit Card", "Sainsbury")
 
 # Stepwise salary history: (effective_date, monthly_net, employer_memo)
-# Employer memos use the redacted forms from SPEC_AGENT §9.
+# Employer memos use the redacted forms from AGENT_SPEC §9.
 SALARY_EVENTS = [
     (date(2011, 1, 1), 3200.00, "COMPANY_A SALARY"),
     (date(2013, 4, 1), 3600.00, "COMPANY_A SALARY"),
@@ -1273,7 +1273,7 @@ def gen_cc_payments(out: list[Txn]) -> None:
     as £50 dinner + £50 CC payment = £100 spend. The exclusion rule is
     simply: drop rows where (category_main='Shopping' AND
     category_sub='CreditCard'). This matches the default behaviour of
-    `get_spending_summary` in SPEC_AGENT §5.2.
+    `get_spending_summary` in AGENT_SPEC §5.2.
     """
     # Sum CC spend per (year, month, account_number).
     cc_spend: dict[tuple[int, int, str], float] = {}

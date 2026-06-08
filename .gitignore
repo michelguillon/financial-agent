@@ -1,4 +1,4 @@
-# Private data — never commit (SPEC_AGENT.md §9)
+# Private data — never commit (AGENT_SPEC.md §9)
 data/real/
 data/finance.db
 data/finance_real.db

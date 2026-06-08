@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Finance Agent — Architecture</title>
+<style>
+:root {
+  --bg: #f7f6f2; --card: #ffffff; --text: #1a1a18; --muted: #6b6b65;
+  --border: #e2e0d8; --tab-active: #1a1a18; --tab-hover: #f1efe8;
+  --purple-fill: #EEEDFE; --purple-stroke: #534AB7; --purple-text: #3C3489;
+  --teal-fill: #E1F5EE; --teal-stroke: #0F6E56; --teal-text: #085041;
+  --amber-fill: #FAEEDA; --amber-stroke: #854F0B; --amber-text: #633806;
+  --gray-fill: #F1EFE8; --gray-stroke: #5F5E5A; --gray-text: #444441;
+  --coral-fill: #FAECE7; --coral-stroke: #993C1D; --coral-text: #712B13;
+  --arrow: #888780; --line: #C8C6BC;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1a1a18; --card: #232320; --text: #e8e6df; --muted: #9c9a92;
+    --border: #333330; --tab-active: #e8e6df; --tab-hover: #2c2c2a;
+    --purple-fill: #26215C; --purple-stroke: #AFA9EC; --purple-text: #CECBF6;
+    --teal-fill: #04342C; --teal-stroke: #5DCAA5; --teal-text: #9FE1CB;
+    --amber-fill: #412402; --amber-stroke: #EF9F27; --amber-text: #FAC775;
+    --gray-fill: #2C2C2A; --gray-stroke: #B4B2A9; --gray-text: #D3D1C7;
+    --coral-fill: #4A1B0C; --coral-stroke: #F0997B; --coral-text: #F5C4B3;
+    --arrow: #888780; --line: #444440;
+  }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Georgia', serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+.header { padding: 32px 48px 0; border-bottom: 1px solid var(--border); }
+.header h1 { font-size: 22px; font-weight: 400; letter-spacing: -0.3px; margin-bottom: 4px; }
+.header p { font-size: 13px; color: var(--muted); margin-bottom: 0; }
+.tabs { display: flex; gap: 0; padding: 0 48px; border-bottom: 1px solid var(--border); margin-top: 0; overflow-x: auto; }
+.tab { padding: 14px 20px; font-size: 13px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; transition: color 0.15s; }
+.tab:hover { color: var(--text); background: var(--tab-hover); }
+.tab.active { color: var(--tab-active); border-bottom-color: var(--tab-active); font-weight: 600; }
+.content { padding: 40px 48px; max-width: 980px; }
+.panel { display: none; }
+.panel.active { display: block; }
+h2 { font-size: 20px; font-weight: 400; margin-bottom: 8px; letter-spacing: -0.3px; }
+h3 { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: var(--muted); margin: 32px 0 12px; }
+p { font-size: 15px; line-height: 1.7; color: var(--muted); margin-bottom: 16px; max-width: 680px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 28px; margin-bottom: 32px; overflow: hidden; }
+svg { width: 100%; display: block; }
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.legend-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+.legend-dot { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+.decision { border-left: 3px solid var(--purple-stroke); padding: 12px 16px; margin-bottom: 16px; background: var(--purple-fill); border-radius: 0 6px 6px 0; }
+.decision strong { font-size: 13px; color: var(--purple-text); display: block; margin-bottom: 4px; }
+.decision span { font-size: 13px; color: var(--muted); line-height: 1.6; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+th { text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+td { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text); line-height: 1.5; vertical-align: top; }
+td:first-child { font-family: 'Courier New', monospace; font-size: 12px; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h2 style="font-size:11px;font-weight:400;text-transform:uppercase;letter-spacing:2px;color:var(--muted);margin-bottom:6px;">Personal Finance Agent</h2>
+  <h1>Architecture Reference</h1>
+  <p>Technical, functional, and user journey views. Phase 1 complete + Phase 2 shipped.</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="show('overview')">Overview</div>
+  <div class="tab" onclick="show('technical')">Technical</div>
+  <div class="tab" onclick="show('functional')">Functional</div>
+  <div class="tab" onclick="show('journeys')">User Journeys</div>
+  <div class="tab" onclick="show('principles')">Design Principles</div>
+</div>
+
+<div class="content">
+
+<!-- ═══════════════════════════════════ OVERVIEW ═══════════════════════════════════ -->
+<div class="panel active" id="overview">
+  <h2>What this system is</h2>
+  <p>A conversational agent that classifies bank transactions through a self-improving rule engine and answers forward-looking financial questions grounded in 15 years of real transaction history. The AI is a reasoning interface to a structured knowledge base — not the product itself.</p>
+
+  <div class="card">
+    <svg viewBox="0 0 760 300">
+      <defs>
+        <marker id="ov-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arrow)" stroke-width="1.5" stroke-linecap="round"/>
+        </marker>
+      </defs>
+      <!-- Input -->
+      <rect x="20" y="110" width="140" height="80" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="90" y="143" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--gray-text)" font-weight="600">Inputs</text>
+      <text x="90" y="162" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">Bank CSVs</text>
+      <text x="90" y="178" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">User messages / JD</text>
+
+      <line x1="160" y1="150" x2="200" y2="150" stroke="var(--arrow)" stroke-width="1" marker-end="url(#ov-arr)"/>
+
+      <!-- System box -->
+      <rect x="200" y="30" width="360" height="240" rx="12" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="6 3"/>
+      <text x="380" y="58" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">SYSTEM BOUNDARY</text>
+
+      <!-- Classification engine -->
+      <rect x="220" y="70" width="150" height="60" rx="7" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="295" y="95" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--teal-text)" font-weight="600">Classification</text>
+      <text x="295" y="113" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">rules + HITL + RAG</text>
+
+      <!-- Scenario engine -->
+      <rect x="220" y="155" width="150" height="60" rx="7" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="295" y="180" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--purple-text)" font-weight="600">Scenario modelling</text>
+      <text x="295" y="198" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">grounded in real history</text>
+
+      <!-- Orchestrator -->
+      <rect x="390" y="100" width="150" height="70" rx="7" fill="var(--amber-fill)" stroke="var(--amber-stroke)" stroke-width="0.8"/>
+      <text x="465" y="125" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--amber-text)" font-weight="600">Orchestrator</text>
+      <text x="465" y="143" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--amber-stroke)">Claude Sonnet</text>
+      <text x="465" y="158" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--amber-stroke)">state · routing · HITL</text>
+
+      <line x1="370" y1="100" x2="390" y2="120" stroke="var(--arrow)" stroke-width="0.8" marker-end="url(#ov-arr)"/>
+      <line x1="370" y1="185" x2="390" y2="160" stroke="var(--arrow)" stroke-width="0.8" marker-end="url(#ov-arr)"/>
+
+      <line x1="560" y1="150" x2="600" y2="150" stroke="var(--arrow)" stroke-width="1" marker-end="url(#ov-arr)"/>
+
+      <!-- Output -->
+      <rect x="600" y="90" width="140" height="120" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="670" y="118" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--gray-text)" font-weight="600">Outputs</text>
+      <text x="670" y="138" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">Classified transactions</text>
+      <text x="670" y="155" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">Scenario analysis</text>
+      <text x="670" y="172" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">Approved rules</text>
+      <text x="670" y="189" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--muted)">Audit transcript</text>
+
+      <!-- Human loop -->
+      <path d="M380 240 Q380 280 90 280 Q90 240 90 210" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ov-arr)"/>
+      <text x="240" y="275" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">human-in-the-loop (approve / correct / query)</text>
+    </svg>
+  </div>
+
+  <h3>System facts</h3>
+  <table>
+    <tr><th>Dimension</th><th>Value</th></tr>
+    <tr><td>Transaction history</td><td>15 years of real bank data · 18,780 synthetic rows for demo</td></tr>
+    <tr><td>Classification rules</td><td>~45 seeded rules · agent can propose new rules · human approves</td></tr>
+    <tr><td>Tools</td><td>15 (6 classification · 4 scenario · 2 state · 2 batch · 1 taxonomy)</td></tr>
+    <tr><td>Models</td><td>Claude Sonnet 4.6 (orchestrator) · Haiku 4.5 (classifier / validator)</td></tr>
+    <tr><td>Front-ends</td><td>CLI REPL · React/FastAPI web UI · transcript replay</td></tr>
+    <tr><td>Tests</td><td>116 deterministic · 3 LLM-gated · session-scoped SQLite fixture</td></tr>
+    <tr><td>Cost (typical session)</td><td>$0.01–0.05 (CLI, cached) · capped at $0.50/session (web)</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════ TECHNICAL ═══════════════════════════════════ -->
+<div class="panel" id="technical">
+  <h2>Technical architecture</h2>
+  <p>All components run in Docker on the M720q home server. The web UI is served behind a Cloudflare tunnel. Real data stays on the host filesystem, never in the container image.</p>
+
+  <div class="card">
+    <svg viewBox="0 0 780 400">
+      <defs>
+        <marker id="tc-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arrow)" stroke-width="1.5" stroke-linecap="round"/>
+        </marker>
+      </defs>
+
+      <!-- Docker boundary -->
+      <rect x="160" y="10" width="450" height="375" rx="12" fill="none" stroke="var(--border)" stroke-width="1.5" stroke-dasharray="6 3"/>
+      <text x="385" y="32" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" letter-spacing="2">DOCKER CONTAINER</text>
+
+      <!-- User: CLI -->
+      <rect x="10" y="80" width="120" height="44" rx="7" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="70" y="98" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--gray-text)" font-weight="600">CLI (terminal)</text>
+      <text x="70" y="114" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">python -m agent</text>
+
+      <!-- User: Browser -->
+      <rect x="10" y="160" width="120" height="44" rx="7" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="70" y="178" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--gray-text)" font-weight="600">Browser</text>
+      <text x="70" y="194" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">React + Vite UI</text>
+
+      <!-- Arrows into agent -->
+      <line x1="130" y1="102" x2="178" y2="102" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#tc-arr)"/>
+      <line x1="130" y1="182" x2="178" y2="160" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#tc-arr)"/>
+
+      <!-- Agent loop -->
+      <rect x="178" y="60" width="180" height="100" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="268" y="85" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--purple-text)" font-weight="600">Agent loop</text>
+      <text x="268" y="103" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">Claude Sonnet 4.6</text>
+      <text x="268" y="118" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">tool_registry · dispatch</text>
+      <text x="268" y="133" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">B1 approval gate</text>
+      <text x="268" y="148" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">prompt caching</text>
+
+      <!-- FastAPI -->
+      <rect x="178" y="190" width="180" height="55" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="268" y="213" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--teal-text)" font-weight="600">FastAPI backend</text>
+      <text x="268" y="231" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">SSE · session isolation · cost cap</text>
+
+      <!-- Tool registry → SQLite -->
+      <line x1="358" y1="110" x2="400" y2="110" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#tc-arr)"/>
+      <line x1="358" y1="217" x2="400" y2="217" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#tc-arr)"/>
+
+      <!-- SQLite -->
+      <rect x="400" y="50" width="180" height="200" rx="8" fill="var(--amber-fill)" stroke="var(--amber-stroke)" stroke-width="0.8"/>
+      <text x="490" y="75" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--amber-text)" font-weight="600">SQLite (finance.db)</text>
+      <line x1="416" y1="86" x2="564" y2="86" stroke="var(--amber-stroke)" stroke-width="0.4" opacity="0.5"/>
+      <text x="490" y="105" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--amber-stroke)">transactions</text>
+      <text x="490" y="121" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">15 years · data_source col</text>
+      <line x1="416" y1="132" x2="564" y2="132" stroke="var(--amber-stroke)" stroke-width="0.4" opacity="0.4"/>
+      <text x="490" y="150" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--amber-stroke)">classification_rules</text>
+      <text x="490" y="166" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">seeded + agent-added</text>
+      <line x1="416" y1="178" x2="564" y2="178" stroke="var(--amber-stroke)" stroke-width="0.4" opacity="0.4"/>
+      <text x="490" y="196" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--amber-stroke)">agent_state</text>
+      <text x="490" y="212" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">cross-session facts</text>
+      <line x1="416" y1="222" x2="564" y2="222" stroke="var(--amber-stroke)" stroke-width="0.4" opacity="0.4"/>
+      <text x="490" y="237" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--amber-stroke)">pending_batches</text>
+
+      <!-- JSONL logs -->
+      <rect x="400" y="270" width="180" height="55" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="490" y="293" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--gray-text)" font-weight="600">JSONL transcripts</text>
+      <text x="490" y="311" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">logs/<ts>.jsonl · replayable</text>
+
+      <line x1="490" y1="250" x2="490" y2="270" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#tc-arr)"/>
+
+      <!-- External APIs -->
+      <rect x="630" y="50" width="140" height="85" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="700" y="73" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--purple-text)" font-weight="600">Anthropic API</text>
+      <text x="700" y="91" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">Sonnet 4.6 (loop)</text>
+      <text x="700" y="107" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">Haiku 4.5 (classify)</text>
+      <text x="700" y="123" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">Batch API (bulk)</text>
+
+      <line x1="580" y1="110" x2="630" y2="90" stroke="var(--arrow)" stroke-width="0.9" stroke-dasharray="4 2" marker-end="url(#tc-arr)"/>
+
+      <!-- Data mount note -->
+      <rect x="178" y="335" width="402" height="38" rx="6" fill="var(--gray-fill)" stroke="var(--border)" stroke-width="0.8"/>
+      <text x="379" y="349" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">Host volume mounts: data/real/ (gitignored) · finance.db (gitignored) · logs/ (gitignored)</text>
+      <text x="379" y="365" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">Container image contains only: code + synthetic data + seed rules</text>
+    </svg>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--purple-fill);border:1px solid var(--purple-stroke)"></div>Agent reasoning (Claude)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--teal-fill);border:1px solid var(--teal-stroke)"></div>Web infrastructure</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--amber-fill);border:1px solid var(--amber-stroke)"></div>Persistence (SQLite)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--gray-fill);border:1px solid var(--gray-stroke)"></div>I/O + storage</div>
+    </div>
+  </div>
+
+  <h3>Model routing</h3>
+  <table>
+    <tr><th>Task</th><th>Model</th><th>Why</th></tr>
+    <tr><td>Orchestration loop + scenario reasoning</td><td>claude-sonnet-4-6</td><td>Complex multi-step reasoning, cross-turn state management</td></tr>
+    <tr><td>Classification suggestions (interactive)</td><td>claude-haiku-4-5</td><td>Structured short-input/output task — 20× cheaper, same quality</td></tr>
+    <tr><td>Bulk classification backlog</td><td>claude-haiku-4-5 via Batch API</td><td>50% discount, async acceptable, same model</td></tr>
+    <tr><td>Formatting validation</td><td>claude-haiku-4-5</td><td>Deterministic quality check — fast, cheap</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════ FUNCTIONAL ═══════════════════════════════════ -->
+<div class="panel" id="functional">
+  <h2>Functional architecture</h2>
+  <p>The agent loop is the single execution path for both classification and scenario work. Tool groups expose different capabilities; the orchestrator decides which to call.</p>
+
+  <div class="card">
+    <svg viewBox="0 0 680 420">
+      <defs>
+        <marker id="fn-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arrow)" stroke-width="1.5" stroke-linecap="round"/>
+        </marker>
+      </defs>
+
+      <!-- User -->
+      <rect x="220" y="20" width="200" height="44" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="320" y="42" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--gray-text)" font-weight="600">User message</text>
+
+      <line x1="320" y1="64" x2="320" y2="96" stroke="var(--arrow)" stroke-width="1" marker-end="url(#fn-arr)"/>
+
+      <!-- Build context -->
+      <rect x="190" y="96" width="260" height="58" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="320" y="118" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--purple-text)" font-weight="600">Build context</text>
+      <text x="320" y="137" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">system prompt · agent_state snapshot · session history</text>
+
+      <line x1="320" y1="154" x2="320" y2="186" stroke="var(--arrow)" stroke-width="1" marker-end="url(#fn-arr)"/>
+
+      <!-- API call -->
+      <rect x="190" y="186" width="260" height="58" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="320" y="208" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--purple-text)" font-weight="600">Claude API call</text>
+      <text x="320" y="227" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">Sonnet 4.6 · tools registered</text>
+
+      <line x1="320" y1="244" x2="320" y2="276" stroke="var(--arrow)" stroke-width="1" marker-end="url(#fn-arr)"/>
+
+      <!-- Decision -->
+      <rect x="190" y="276" width="260" height="44" rx="8" fill="var(--amber-fill)" stroke="var(--amber-stroke)" stroke-width="0.8"/>
+      <text x="320" y="298" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--amber-text)" font-weight="600">tool_use blocks in response?</text>
+
+      <!-- Yes: tool dispatch -->
+      <path d="M450,298 L480,298 L480,340 L510,340" fill="none" stroke="var(--arrow)" stroke-width="1" marker-end="url(#fn-arr)"/>
+      <text x="462" y="291" font-family="Georgia,serif" font-size="11" fill="var(--muted)">Yes</text>
+
+      <!-- Tool groups (right side) -->
+      <rect x="510" y="300" width="155" height="26" rx="5" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.7"/>
+      <text x="587" y="313" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-text)" font-weight="600">Classification tools (6)</text>
+      <rect x="510" y="332" width="155" height="26" rx="5" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.7"/>
+      <text x="587" y="345" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-text)" font-weight="600">Scenario tools (4)</text>
+      <rect x="510" y="364" width="155" height="26" rx="5" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.7"/>
+      <text x="587" y="377" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-text)" font-weight="600">State tools (2) + Batch (2)</text>
+
+      <!-- Loop back arrow -->
+      <path d="M510,345 L492,345 L492,215 L450,215" fill="none" stroke="var(--arrow)" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#fn-arr)"/>
+      <text x="495" y="278" font-family="Georgia,serif" font-size="10" fill="var(--muted)">inject results · re-call</text>
+
+      <!-- No: respond -->
+      <line x1="320" y1="320" x2="320" y2="356" stroke="var(--arrow)" stroke-width="1" marker-end="url(#fn-arr)"/>
+      <text x="329" y="338" font-family="Georgia,serif" font-size="11" fill="var(--muted)">No</text>
+
+      <!-- Response -->
+      <rect x="190" y="356" width="260" height="44" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="320" y="378" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--gray-text)" font-weight="600">Text response to user</text>
+
+      <!-- Next turn loop -->
+      <path d="M190,378 L160,378 L160,108 L190,108" fill="none" stroke="var(--border)" stroke-width="0.8" stroke-dasharray="4 3"/>
+      <text x="148" y="245" font-family="Georgia,serif" font-size="9" fill="var(--border)" text-anchor="middle" transform="rotate(-90 148 245)">next turn</text>
+    </svg>
+  </div>
+
+  <h3>Tool groups</h3>
+  <table>
+    <tr><th>Group</th><th>Tools</th><th>What they do</th></tr>
+    <tr><td>Classification (6)</td><td>get_unclassified · suggest · preview_rule · apply_rule · preview_taxonomy · apply_taxonomy</td><td>Backlog review, rule suggestion via Haiku, HITL approval gate, taxonomy extension</td></tr>
+    <tr><td>Scenario (4)</td><td>get_spending_summary · get_income_summary · classify_fixed_vs_discretionary · model_scenario</td><td>Historical analysis + forward-looking scenario modelling against real data</td></tr>
+    <tr><td>State (2)</td><td>get_agent_state · set_agent_state</td><td>Cross-session knowledge persistence — mortgage balance, rate dates, income source</td></tr>
+    <tr><td>Batch (2)</td><td>bulk_classify_async · check_batch_results</td><td>Batch API for large Missing backlogs — 50% discount, async</td></tr>
+    <tr><td>Taxonomy (embedded)</td><td>preview_taxonomy_extension · apply_taxonomy_extension</td><td>Agent-proposed taxonomy additions — validates against real Missing rows before writing</td></tr>
+  </table>
+
+  <h3>Memory architecture</h3>
+  <div class="card">
+    <svg viewBox="0 0 680 200">
+      <rect x="20" y="30" width="190" height="140" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="115" y="58" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--purple-text)" font-weight="600">Session memory</text>
+      <line x1="36" y1="68" x2="194" y2="68" stroke="var(--purple-stroke)" stroke-width="0.4" opacity="0.5"/>
+      <text x="115" y="85" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">messages array</text>
+      <text x="115" y="102" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" font-style="italic">replayed on every call</text>
+      <text x="115" y="118" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" font-style="italic">8–15 turns typical</text>
+      <rect x="47" y="148" width="136" height="16" rx="4" fill="var(--purple-stroke)" opacity="0.12"/>
+      <text x="115" y="157" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-text)">ephemeral · resets per session</text>
+
+      <rect x="245" y="30" width="190" height="140" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="340" y="58" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--teal-text)" font-weight="600">Agent state</text>
+      <line x1="261" y1="68" x2="419" y2="68" stroke="var(--teal-stroke)" stroke-width="0.4" opacity="0.5"/>
+      <text x="340" y="85" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">SQLite agent_state table</text>
+      <text x="340" y="102" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" font-style="italic">avg_monthly_groceries</text>
+      <text x="340" y="118" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" font-style="italic">mortgage_rate_change_date</text>
+      <rect x="272" y="148" width="136" height="16" rx="4" fill="var(--teal-stroke)" opacity="0.12"/>
+      <text x="340" y="157" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-text)">persistent · cross-session</text>
+
+      <rect x="470" y="30" width="190" height="140" rx="8" fill="var(--coral-fill)" stroke="var(--coral-stroke)" stroke-width="0.8"/>
+      <text x="565" y="58" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--coral-text)" font-weight="600">Transaction data</text>
+      <line x1="486" y1="68" x2="644" y2="68" stroke="var(--coral-stroke)" stroke-width="0.4" opacity="0.5"/>
+      <text x="565" y="85" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--coral-stroke)">SQLite · 3 tables</text>
+      <text x="565" y="102" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" font-style="italic">transactions (15 yrs)</text>
+      <text x="565" y="118" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)" font-style="italic">classification_rules</text>
+      <rect x="497" y="148" width="136" height="16" rx="4" fill="var(--coral-stroke)" opacity="0.12"/>
+      <text x="565" y="157" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--coral-text)">persistent · source of truth</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════ JOURNEYS ═══════════════════════════════════ -->
+<div class="panel" id="journeys">
+  <h2>User journeys</h2>
+
+  <h3>Journey 1 — Classify unknown transactions (HITL loop)</h3>
+  <p>The agent fetches unclassified rows, proposes a rule via Haiku, previews blast radius, presents to the user, and only writes on explicit approval. The code gate (B1) enforces this at the dispatch layer.</p>
+  <div class="card">
+    <svg viewBox="0 0 680 480">
+      <defs>
+        <marker id="j1-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arrow)" stroke-width="1.5" stroke-linecap="round"/>
+        </marker>
+      </defs>
+      <rect x="170" y="20" width="300" height="44" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="320" y="42" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--gray-text)" font-weight="600">User: "classify my transactions"</text>
+      <line x1="320" y1="64" x2="320" y2="96" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j1-arr)"/>
+      <!-- Tool 1 -->
+      <rect x="150" y="96" width="340" height="44" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="230" y="108" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">TOOL CALL</text>
+      <text x="320" y="123" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--teal-text)" font-weight="600">get_unclassified_transactions()</text>
+      <line x1="320" y1="140" x2="320" y2="172" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j1-arr)"/>
+      <!-- Tool 2 -->
+      <rect x="150" y="172" width="340" height="52" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="230" y="183" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">TOOL CALL · Haiku 4.5</text>
+      <text x="320" y="200" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--teal-text)" font-weight="600">suggest_classification(memo, amount)</text>
+      <text x="320" y="217" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">→ category + regex pattern + rationale</text>
+      <line x1="320" y1="224" x2="320" y2="256" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j1-arr)"/>
+      <!-- Tool 3 -->
+      <rect x="150" y="256" width="340" height="52" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="230" y="267" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">TOOL CALL · read-only</text>
+      <text x="320" y="284" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--teal-text)" font-weight="600">preview_rule_application(pattern)</text>
+      <text x="320" y="301" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">→ N matching rows + examples</text>
+      <line x1="320" y1="308" x2="320" y2="340" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j1-arr)"/>
+      <!-- Agent presents -->
+      <rect x="150" y="340" width="340" height="44" rx="8" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="320" y="358" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--purple-text)" font-weight="600">Agent: "Rule matches 12 rows — approve?"</text>
+      <text x="320" y="376" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">Shows: pattern · category · example rows</text>
+      <line x1="320" y1="384" x2="320" y2="412" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j1-arr)"/>
+      <!-- HITL gate -->
+      <rect x="190" y="412" width="260" height="44" rx="8" fill="var(--amber-fill)" stroke="var(--amber-stroke)" stroke-width="0.8"/>
+      <text x="320" y="434" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--amber-text)" font-weight="600">Human approves?</text>
+      <!-- No loop -->
+      <path d="M450,434 L478,434 L478,228 L490,228" fill="none" stroke="var(--arrow)" stroke-width="1" stroke-dasharray="5 3" marker-end="url(#j1-arr)"/>
+      <text x="476" y="330" font-family="Georgia,serif" font-size="10" fill="var(--muted)" text-anchor="start">No → refine</text>
+      <!-- Yes -->
+      <line x1="320" y1="456" x2="320" y2="468" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j1-arr)"/>
+      <text x="329" y="464" font-family="Georgia,serif" font-size="10" fill="var(--muted)">Yes</text>
+      <rect x="150" y="468" width="340" height="14" rx="4" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.7"/>
+      <text x="320" y="476" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-text)" font-weight="600">apply_classification_rule() — rule written · rows updated</text>
+    </svg>
+  </div>
+
+  <h3>Journey 2 — Scenario: mortgage rate change</h3>
+  <p>Multiple tools called in one response. The agent decides what data it needs, calls all tools, synthesises results, then writes discovered facts to agent_state for future sessions.</p>
+  <div class="card">
+    <svg viewBox="0 0 680 440">
+      <defs>
+        <marker id="j2-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arrow)" stroke-width="1.5" stroke-linecap="round"/>
+        </marker>
+      </defs>
+      <rect x="80" y="20" width="500" height="44" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="330" y="42" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="var(--gray-text)" font-weight="600">User: "My mortgage goes from 2% to 4% — how does that affect my budget?"</text>
+      <line x1="330" y1="64" x2="330" y2="90" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j2-arr)"/>
+      <!-- Multi-tool call -->
+      <rect x="80" y="90" width="500" height="30" rx="6" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="330" y="105" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-text)">Claude decides it needs 3 tools simultaneously → one response, 3 tool_use blocks</text>
+      <line x1="200" y1="120" x2="200" y2="148" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#j2-arr)"/>
+      <line x1="330" y1="120" x2="330" y2="148" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#j2-arr)"/>
+      <line x1="460" y1="120" x2="460" y2="148" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#j2-arr)"/>
+      <!-- Three tools -->
+      <rect x="100" y="148" width="180" height="50" rx="7" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="190" y="165" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">TOOL CALL 1</text>
+      <text x="190" y="181" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--teal-text)" font-weight="600">get_income_summary</text>
+      <text x="190" y="194" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">(months=6)</text>
+      <rect x="240" y="148" width="180" height="50" rx="7" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="330" y="165" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">TOOL CALL 2</text>
+      <text x="330" y="181" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--teal-text)" font-weight="600">classify_fixed_vs_disc</text>
+      <text x="330" y="194" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">(months=6)</text>
+      <rect x="380" y="148" width="190" height="50" rx="7" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="475" y="165" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">TOOL CALL 3</text>
+      <text x="475" y="181" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--teal-text)" font-weight="600">get_agent_state</text>
+      <text x="475" y="194" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)">("mortgage_balance") → null</text>
+      <!-- After tools -->
+      <line x1="190" y1="198" x2="260" y2="232" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#j2-arr)"/>
+      <line x1="330" y1="198" x2="330" y2="232" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#j2-arr)"/>
+      <line x1="460" y1="198" x2="400" y2="232" stroke="var(--arrow)" stroke-width="0.9" marker-end="url(#j2-arr)"/>
+      <rect x="120" y="232" width="420" height="44" rx="7" fill="var(--purple-fill)" stroke="var(--purple-stroke)" stroke-width="0.8"/>
+      <text x="330" y="250" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--purple-text)" font-weight="600">Infers balance from payment at 2% · calls model_scenario</text>
+      <text x="330" y="268" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--purple-stroke)">→ current surplus £266, new surplus -£401, gap £667/month</text>
+      <line x1="330" y1="276" x2="330" y2="308" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j2-arr)"/>
+      <!-- State write -->
+      <rect x="120" y="308" width="420" height="44" rx="7" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="240" y="320" text-anchor="middle" font-family="Georgia,serif" font-size="9" fill="var(--teal-stroke)">3 STATE WRITES (cross-session)</text>
+      <text x="330" y="338" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--teal-text)" font-weight="600">set_agent_state: rate_change_date · current_rate · new_rate</text>
+      <line x1="330" y1="352" x2="330" y2="384" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j2-arr)"/>
+      <!-- Response -->
+      <rect x="120" y="384" width="420" height="44" rx="7" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="330" y="402" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="var(--gray-text)" font-weight="600">Response: ranked cuts with £ targets</text>
+      <text x="330" y="420" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">"15% cut on groceries + eating out closes the gap entirely"</text>
+    </svg>
+  </div>
+
+  <h3>Journey 3 — Ingest real bank data</h3>
+  <p>One-time setup or run after a new bank export. The CLI combines and classifies CSVs, runs the seed rules, and surfaces a Missing count for the agent to work through.</p>
+  <div class="card">
+    <svg viewBox="0 0 680 240">
+      <defs>
+        <marker id="j3-arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="var(--arrow)" stroke-width="1.5" stroke-linecap="round"/>
+        </marker>
+      </defs>
+      <rect x="20" y="90" width="130" height="60" rx="8" fill="var(--gray-fill)" stroke="var(--gray-stroke)" stroke-width="0.8"/>
+      <text x="85" y="113" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--gray-text)" font-weight="600">Bank CSVs</text>
+      <text x="85" y="130" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">data/real/raw/</text>
+      <text x="85" y="145" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">4 account types</text>
+      <line x1="150" y1="120" x2="182" y2="120" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j3-arr)"/>
+      <rect x="182" y="90" width="150" height="60" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="257" y="110" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)" font-weight="600">budget_importer.py</text>
+      <text x="257" y="126" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">combine + normalise</text>
+      <text x="257" y="142" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">→ preprocessed CSV</text>
+      <line x1="332" y1="120" x2="364" y2="120" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j3-arr)"/>
+      <rect x="364" y="90" width="150" height="60" rx="8" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="439" y="110" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--teal-stroke)" font-weight="600">db/migrate.py</text>
+      <text x="439" y="126" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">ingest to SQLite</text>
+      <text x="439" y="142" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">seed_rules → classify</text>
+      <line x1="514" y1="120" x2="546" y2="120" stroke="var(--arrow)" stroke-width="1" marker-end="url(#j3-arr)"/>
+      <rect x="546" y="90" width="114" height="60" rx="8" fill="var(--amber-fill)" stroke="var(--amber-stroke)" stroke-width="0.8"/>
+      <text x="603" y="113" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--amber-text)" font-weight="600">Validation</text>
+      <text x="603" y="130" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">row count · date range</text>
+      <text x="603" y="146" text-anchor="middle" font-family="Georgia,serif" font-size="10" fill="var(--muted)">Missing count</text>
+      <!-- CLI command -->
+      <rect x="182" y="30" width="478" height="30" rx="5" fill="var(--gray-fill)" stroke="var(--border)" stroke-width="0.8"/>
+      <text x="421" y="45" text-anchor="middle" font-family="Courier New,monospace" font-size="11" fill="var(--muted)">python -m db.migrate --raw 2026_06</text>
+      <!-- Result -->
+      <rect x="182" y="180" width="478" height="30" rx="5" fill="var(--teal-fill)" stroke="var(--teal-stroke)" stroke-width="0.8"/>
+      <text x="421" y="199" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="var(--teal-text)">Ready: 4,847 new rows · 23 Missing · agent can classify immediately</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════ PRINCIPLES ═══════════════════════════════════ -->
+<div class="panel" id="principles">
+  <h2>Design principles</h2>
+  <p>Nine load-bearing decisions. Each has a concrete reason, an alternative that was rejected, and a pattern that generalises beyond this project.</p>
+
+  <div class="decision">
+    <strong>1. Raw API tool use — no framework</strong>
+    <span>Building the agent loop manually made the mechanics concrete: build context → call API → execute tools if present → loop. ~40 lines of Python. Once you've written it, any framework (LangGraph etc.) is a known set of trade-offs. Frameworks were deferred to a future project where the fundamentals are already understood.</span>
+  </div>
+  <div class="decision">
+    <strong>2. Hybrid session + cross-session memory</strong>
+    <span>Messages array handles within-session continuity (trivial, cheap). SQLite agent_state handles cross-session facts (explicit, queryable, correctable). Conflating them — treating long history as memory — is a common mistake. Each memory layer serves a different purpose and uses a different mechanism.</span>
+  </div>
+  <div class="decision">
+    <strong>3. Preview-before-apply as the default for state mutation</strong>
+    <span>Every tool that writes to the database has a paired read-only preview. Initially added for classification rules only. Promoted to a project-wide default (B1 code gate) once the pattern proved its value. No apply_* runs without a preceding preview_* in the conversation history.</span>
+  </div>
+  <div class="decision">
+    <strong>4. Phase 1 pipeline + rule lookup as a Strangler Fig</strong>
+    <span>The hardcoded if/elif chain became the fallback when SQLite rules were introduced, then was removed entirely in A1. New behaviour wrapped old behaviour. Nothing broke during the transition. This is the Strangler Fig pattern — the right way to modernise working code without a full rewrite.</span>
+  </div>
+  <div class="decision">
+    <strong>5. Model routing by task complexity</strong>
+    <span>Claude Sonnet for the orchestration loop (complex multi-step reasoning). Claude Haiku for classification suggestions (short structured input/output — same quality, 20× cheaper). Prompt caching on system prompt and agent_state snapshot. The cost question is: what is the complexity ceiling of this specific task?</span>
+  </div>
+  <div class="decision">
+    <strong>6. SQLite over alternatives (MongoDB, Postgres, JSON file)</strong>
+    <span>Transactions are naturally tabular. SQLite is single-file, zero-infrastructure, built into Python. MongoDB would add a server process for no benefit. PostgreSQL is multi-user infrastructure for a single-user tool. JSON file has no queryability. The right tool for relational data at personal scale.</span>
+  </div>
+  <div class="decision">
+    <strong>7. Renderer protocol as the display abstraction</strong>
+    <span>Not in the original spec — emerged during Step 5. The agent loop calls renderer.show_response() without knowing whether it's writing to a terminal, an SSE stream, or a test fixture. This is why the web UI (C4), transcript replay (D2), and every subsequent renderer required zero changes to run_turn().</span>
+  </div>
+  <div class="decision">
+    <strong>8. Demo mode at the data layer</strong>
+    <span>A data_source column on the transactions table. Synthetic data is committed to the repo. Real data arrives via Docker volume mount, gitignored. The demo is safe to share publicly without any auth system. Privacy is an architecture decision, not a security layer bolted on at deployment.</span>
+  </div>
+  <div class="decision">
+    <strong>9. Audit trail separate from context</strong>
+    <span>All session events written to JSONL transcripts. Reasoning captured in structured log entries. None of this is fed back into the messages array — context stays clean and cheap. The audit trail answers "why did the agent do that?" without inflating token costs per turn.</span>
+  </div>
+</div>
+
+</div>
+
+<script>
+function show(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

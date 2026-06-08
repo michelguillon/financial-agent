@@ -20,32 +20,32 @@ conversations.
 > (transcript replay), /admin/stats (operator monitoring).
 > **Live demo:** _hosted URL forthcoming — runs synthetic UK data,
 > ephemeral sessions, $0.50 per-session budget cap._
-> See [docs/SPEC_AGENT.md §8](docs/SPEC_AGENT.md#8-build-history) for what's done and [§10](docs/SPEC_AGENT.md#10-out-of-scope) for what's deferred.
+> See [docs/AGENT_SPEC.md §8](docs/AGENT_SPEC.md#8-build-history) for what's done and [§10](docs/AGENT_SPEC.md#10-out-of-scope) for what's deferred.
 
 ---
 
 ## What's interesting about the architecture
 
-The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
+The full spec is in [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md). The highlights:
 
 - **One agent, two tool groups.** Classification tools (suggest regex rules,
   process the `Missing` backlog with human approval) and scenario tools
   (spending summaries, fixed/discretionary split, scenario modelling) share
   one agent loop, one SQLite store, one conversation. The shared substrate
   is the point: better classifications → better scenario answers.
-  ([SPEC §2](docs/SPEC_AGENT.md#2-what-this-system-does))
+  ([SPEC §2](docs/AGENT_SPEC.md#2-what-this-system-does))
 
 - **Two memory layers, separate implementations.** A messages array for
   in-session continuity (finance conversations are short — full replay
   costs almost nothing) and a SQLite `agent_state` table for durable facts
   the agent has learned about the user's finances across sessions.
-  ([SPEC §3.1](docs/SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory))
+  ([SPEC §3.1](docs/AGENT_SPEC.md#31--what-stateful-means-hybrid-session--cross-session-memory))
 
 - **Raw Anthropic API tool use — no framework.** No LangChain, no
   LangGraph. The agent loop is ~30 lines of explicit Python: build context,
   call API, dispatch tool calls, inject results, repeat. Every termination
   condition and every error path is visible in the code.
-  ([SPEC §3.2](docs/SPEC_AGENT.md#32--orchestration-raw-api-tool-use-no-framework))
+  ([SPEC §3.2](docs/AGENT_SPEC.md#32--orchestration-raw-api-tool-use-no-framework))
 
 - **Classifier migrated to a SQLite rules table.** Phase 1 used a
   SQLite-first wrapper that fell through to the original hardcoded
@@ -53,12 +53,12 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
   `classification_rules` and deleted the fallback chain. `rule_lookup.py`
   is now the only path. The agent can extend the taxonomy at runtime via
   the paired `preview_taxonomy_extension` / `apply_taxonomy_extension`
-  tools (A3). ([SPEC §3.4](docs/SPEC_AGENT.md#34--classification-engine-migration-two-phase))
+  tools (A3). ([SPEC §3.4](docs/AGENT_SPEC.md#34--classification-engine-migration-two-phase))
 
 - **Demo-mode without auth.** A data-layer switch: if `data/real/` exists,
   use it; otherwise fall back to the synthetic dataset committed to the
   repo. Recruiters get a working demo immediately; real data stays on the
-  home server. ([SPEC §3.6](docs/SPEC_AGENT.md#36--demo-mode))
+  home server. ([SPEC §3.6](docs/AGENT_SPEC.md#36--demo-mode))
 
 ---
 
@@ -89,7 +89,7 @@ The full spec is in [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md). The highlights:
 - **`/admin/stats`** — operator-only JSON snapshot of session counts, demo spend, replay streams, batch counts, rate-limit rejections (gated by `ADMIN_TOKEN`).
 
 Methodology notes and surprises from each step + Phase 2 item are logged in
-[docs/LEARNINGS_AGENT.md](docs/LEARNINGS_AGENT.md). The aim is that the *how* of each step is
+[docs/AGENT_LEARNINGS.md](docs/AGENT_LEARNINGS.md). The aim is that the *how* of each step is
 reusable, not just the *what*.
 
 ---
@@ -173,7 +173,7 @@ The synthetic dataset is 18,780 transactions spanning 2011-01-01 →
 2025-12-31 across 5 accounts (current, savings, three credit cards).
 Deterministic, stdlib only.
 
-Categories follow the taxonomy in [SPEC §4](docs/SPEC_AGENT.md#4-database-schema).
+Categories follow the taxonomy in [SPEC §4](docs/AGENT_SPEC.md#4-database-schema).
 About 5% of the variable spend is intentionally tagged `Missing` (recognisable
 real merchants the classifier doesn't yet know) — that's the agent's
 classification backlog on first run.
@@ -187,7 +187,7 @@ repo, never on a remote.
 
 The legacy importer (`budget_importer.py`, copied from a private repo) is
 redacted before commit per
-[SPEC §9](docs/SPEC_AGENT.md#9-privacy-and-access-pattern): account
+[SPEC §9](docs/AGENT_SPEC.md#9-privacy-and-access-pattern): account
 numbers, employer names, cleaner names, cardholder details, and loan
 references all become generic placeholders. The synthetic generator uses
 the same placeholders, so synthetic and real data flow through the same
@@ -214,9 +214,9 @@ financial-agent/
 ├── requirements.txt                anthropic, python-dotenv, pandas, rich, fastapi (web), …
 ├── .env.example
 ├── docs/
-│   ├── SPEC_AGENT.md                  architecture spec
-│   ├── LEARNINGS_AGENT.md             methodology log, one entry per step + Phase 2 item
-│   └── AGENT_ARCHITECTURE_DIAGRAMS.html (open in a browser)
+│   ├── AGENT_SPEC.md                  architecture spec
+│   ├── AGENT_LEARNINGS.md             methodology log, one entry per step + Phase 2 item
+│   └── AGENT_ARCHITECTURE.html (open in a browser)
 ├── agent/
 │   ├── agent.py                    conversational loop, Renderer protocol, prompt caching
 │   ├── cli.py                      RichRenderer (terminal display layer)

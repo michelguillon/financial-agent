@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AGENT.md) for the architecture and [docs/LEARNINGS_AGENT.md](docs/LEARNINGS_AGENT.md) for the methodology log behind each decision.
+Conventions and gotchas for this project. Read [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md) for the architecture and [docs/AGENT_LEARNINGS.md](docs/AGENT_LEARNINGS.md) for the methodology log behind each decision.
 
 ---
 
@@ -8,7 +8,7 @@ Conventions and gotchas for this project. Read [docs/SPEC_AGENT.md](docs/SPEC_AG
 
 Personal finance agent: 15 tools (state, classification incl. C2 batch, scenarios) wrapped in a conversational loop using Anthropic Sonnet 4.6 + Haiku 4.5. The redacted legacy ingest pipeline ([classifier/budget_importer.py](classifier/budget_importer.py)) is wired into `python -m db.migrate --raw` (C1) for real-data ingestion; today's classifier path lives in [classifier/rule_lookup.py](classifier/rule_lookup.py) (SQLite-backed). The synthetic-data generator produces 18,780 transactions matching the same taxonomy so the system is demoable without real data.
 
-**Build status: Phase 1 + 13 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/SPEC_AGENT.md#8-build-history) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 116 agent + 21 web deterministic tests + 3 LLM-gated), B2 CI (GitHub Actions on push/PR), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C1 (real-data ingestion CLI), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D1 (CLI footer shows both `$0.0058 / £0.0046`), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [SPEC §8](docs/SPEC_AGENT.md#8-build-history) for the full build history and [SPEC §10](docs/SPEC_AGENT.md#10-out-of-scope) for what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE_DIAGRAMS.html](docs/AGENT_ARCHITECTURE_DIAGRAMS.html) (open in a browser).
+**Build status: Phase 1 + 13 Phase 2 items shipped.** Steps 1–5 of [SPEC §8](docs/AGENT_SPEC.md#8-build-history) all shipped. From Phase 2: A1 + A2 (rules migrated into `classification_rules` + taxonomy expansion), A3 (`extend_taxonomy` tool), B1 (dispatch-layer apply-gate), B2 (pytest — 116 agent + 21 web deterministic tests + 3 LLM-gated), B2 CI (GitHub Actions on push/PR), B3 (`bank_statement_parser.py` renamed to `budget_importer.py`), C1 (real-data ingestion CLI), C2 (Batch API for bulk Missing classification, 50% Haiku discount), C4 (web UI), D1 (CLI footer shows both `$0.0058 / £0.0046`), D2 (transcript replay) + the web Live/Replay toggle, /admin/stats (operator monitoring). See [SPEC §8](docs/AGENT_SPEC.md#8-build-history) for the full build history and [SPEC §10](docs/AGENT_SPEC.md#10-out-of-scope) for what's deferred. Architecture diagrams: [docs/AGENT_ARCHITECTURE.html](docs/AGENT_ARCHITECTURE.html) (open in a browser).
 
 ---
 
@@ -34,18 +34,18 @@ The image bakes the code at build time (no source bind-mount). Source edits requ
 These came out of explicit design discussions — don't relitigate without good reason. Each links to the underlying record.
 
 ### Preview-before-apply for any irreversible-write tool
-Project-wide default. The classification flow is the worked example: `preview_rule_application` (no writes) → user approval → `apply_classification_rule` (mutates). Same shape for any new tool that performs a write the user can't trivially undo. See [docs/LEARNINGS_AGENT.md → Preview-before-apply](docs/LEARNINGS_AGENT.md#preview-before-apply-for-destructive-agent-tools).
+Project-wide default. The classification flow is the worked example: `preview_rule_application` (no writes) → user approval → `apply_classification_rule` (mutates). Same shape for any new tool that performs a write the user can't trivially undo. See [docs/AGENT_LEARNINGS.md → Preview-before-apply](docs/AGENT_LEARNINGS.md#preview-before-apply-for-destructive-agent-tools).
 
-Since B1, this is additionally enforced at the dispatch layer: [agent/tool_registry.py](agent/tool_registry.py) `GATED_TOOLS` lists every `apply_*` tool that requires a matching `preview_*` call + user approval in conversation history before it runs. When you add a new irreversible-write tool, add it to `GATED_TOOLS` alongside its preview tool. See [docs/LEARNINGS_AGENT.md → B1](docs/LEARNINGS_AGENT.md#b1--code-gate-for-apply_-tools).
+Since B1, this is additionally enforced at the dispatch layer: [agent/tool_registry.py](agent/tool_registry.py) `GATED_TOOLS` lists every `apply_*` tool that requires a matching `preview_*` call + user approval in conversation history before it runs. When you add a new irreversible-write tool, add it to `GATED_TOOLS` alongside its preview tool. See [docs/AGENT_LEARNINGS.md → B1](docs/AGENT_LEARNINGS.md#b1--code-gate-for-apply_-tools).
 
 ### Two model tiers, routed by task complexity
 - `AGENT_MODEL = "claude-sonnet-4-6"` — main agent loop, scenario reasoning, anything ambiguous.
 - `CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"` — `suggest_classification` (single row, sync) and `bulk_classify_async` (Batch API, ~50% cheaper, async). The agent picks between them per turn based on the backlog size (>10 rows → batch). Both go through the same forced-tool-use shape so the output dict is identical.
 
-Constants in `agent/claude_helpers.py` (incl. `HAIKU_PRICE_*` and `BATCH_DISCOUNT`). Rationale in [SPEC §3.3](docs/SPEC_AGENT.md#33--model-routing-sonnet-46-for-the-agent-loop-haiku-45-for-classification).
+Constants in `agent/claude_helpers.py` (incl. `HAIKU_PRICE_*` and `BATCH_DISCOUNT`). Rationale in [SPEC §3.3](docs/AGENT_SPEC.md#33--model-routing-sonnet-46-for-the-agent-loop-haiku-45-for-classification).
 
 ### State-store boundary rule
-`set_agent_state` is for durable facts the next session would benefit from (e.g. `mortgage_rate_change_date`). Not for conversational scratch, not for things re-derivable from a tool call. Rationale: [SPEC §3.1](docs/SPEC_AGENT.md#31--what-stateful-means-hybrid-session--cross-session-memory).
+`set_agent_state` is for durable facts the next session would benefit from (e.g. `mortgage_rate_change_date`). Not for conversational scratch, not for things re-derivable from a tool call. Rationale: [SPEC §3.1](docs/AGENT_SPEC.md#31--what-stateful-means-hybrid-session--cross-session-memory).
 
 ### Taxonomy is table-defined; agent extends only with approval
 Post-A2 the taxonomy lives in `classifier/rules_seed.py` (loaded into `classification_rules` by `db/seed_rules.py`). A2 added `Travel`/`Transport/rail`/`Leisure/subscription/video`. NETFLIX/AIRBNB/TRAINLINE/DISNEY+ are deliberately kept in `data/synthetic/generate_synthetic.py:NOISE_MEMOS` so the agent demo loop still has Missing transactions to classify into the new categories. When the agent encounters something with no good fit, it must say so honestly (in the system prompt). Post-A3 the agent can extend the taxonomy at runtime via the paired `preview_taxonomy_extension` / `apply_taxonomy_extension` tools (B1 enforces the preview-before-apply contract at dispatch time). Edits to the canonical seed list still require a source change to `rules_seed.py`.
@@ -56,7 +56,7 @@ API costs: tracked internally in **$** (Anthropic billing reality).
 CLI footer renders **both** per-turn: `$0.0058 / £0.0046` (D1, 2026-06-02). The £ side uses a hardcoded `USD_TO_GBP` constant in [agent/claude_helpers.py](agent/claude_helpers.py); refresh it when the displayed figure visibly drifts. Web UI stays $-only (recruiter-facing; the budget cap is in $).
 
 ### Redaction discipline at the data-generation layer
-The redacted classifier and the synthetic data generator share the same placeholders (`ACCOUNT_CURRENT`, `COMPANY_A`, `CLEANER_A`, `CARDHOLDER_NAME_CARDNUMBER`, `LENDER_NAME_REFERENCE`). When introducing new redactable values, update both. See [SPEC §9](docs/SPEC_AGENT.md#9-privacy-and-access-pattern).
+The redacted classifier and the synthetic data generator share the same placeholders (`ACCOUNT_CURRENT`, `COMPANY_A`, `CLEANER_A`, `CARDHOLDER_NAME_CARDNUMBER`, `LENDER_NAME_REFERENCE`). When introducing new redactable values, update both. See [SPEC §9](docs/AGENT_SPEC.md#9-privacy-and-access-pattern).
 
 ---
 
@@ -94,7 +94,7 @@ The demo runs synthetic-data-only forever — real-data ingestion via the web is
 
 ## Verify-by-running (pytest)
 
-The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). 116 agent-side deterministic tests run in ~65s + 21 web tests in ~25s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/LEARNINGS_AGENT.md#b2--pytest-adoption).
+The test suite lives under [tests/](tests/) — one `test_<module>.py` per source module, with shared fixtures in [tests/conftest.py](tests/conftest.py). 116 agent-side deterministic tests run in ~65s + 21 web tests in ~25s; LLM-touching tests are marked `@pytest.mark.llm` and auto-skip unless `RUN_LLM_TESTS=1` is set. See [LEARNINGS → pytest adoption](docs/AGENT_LEARNINGS.md#b2--pytest-adoption).
 
 ```powershell
 # Deterministic — no API key needed
@@ -151,4 +151,4 @@ If you're about to commit something from any of those paths, stop and ask.
 - **Real-data ingest (`python -m db.migrate --raw <date>`)** reads from `data/real/raw/<date>_*.csv` and writes `data/real/preprocessed/<date>_*.csv` before ingesting. Root is `BUDGET_DATA_DIR` (default `./data/real`); override per-invocation with `--budget-root`. `main()` sets `SESSION_DB_PATH=args.db` so `classifier.rule_lookup` opens against the right DB even when `--db` differs from the module default.
 - **Pricing changes → update `agent/agent.py`'s `PRICE_*` constants and `claude_helpers.AGENT_MODEL`/`CLASSIFIER_MODEL` if model versions changed.**
 - **New `set_agent_state` use cases → check the state-store boundary rule.** Is this really a durable fact for next session, or just conversational scratch?
-- **New LEARNINGS entry → append to `docs/LEARNINGS_AGENT.md` Step N section, or add a Cross-cutting decision** if the lesson generalises beyond the step.
+- **New LEARNINGS entry → append to `docs/AGENT_LEARNINGS.md` Step N section, or add a Cross-cutting decision** if the lesson generalises beyond the step.

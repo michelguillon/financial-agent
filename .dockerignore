@@ -54,5 +54,5 @@ web/frontend/dist/
 *.md
 !README.md
 !CLAUDE.md
-!docs/SPEC_AGENT.md
-!docs/LEARNINGS_AGENT.md
+!docs/AGENT_SPEC.md
+!docs/AGENT_LEARNINGS.md

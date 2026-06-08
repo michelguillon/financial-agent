@@ -1,5 +1,5 @@
 -- Personal Finance Agent — SQLite schema
--- Matches SPEC_AGENT.md §4. Re-runnable: every CREATE uses IF NOT EXISTS.
+-- Matches AGENT_SPEC.md §4. Re-runnable: every CREATE uses IF NOT EXISTS.
 
 -- ---------------------------------------------------------------------------
 -- transactions: the primary store.

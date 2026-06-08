@@ -1,4 +1,4 @@
-# SPEC_AGENT.md — Personal Finance Agent
+# AGENT_SPEC.md — Personal Finance Agent
 ## Architecture Specification
 
 **Project:** Week 2 Portfolio — AI Agents  
@@ -147,7 +147,7 @@ Processing a backlog of `Missing` transactions is not a real-time task. The user
 
 Haiku 4.5 + Batch API = $0.50/$2.50 per million tokens — effectively negligible for personal use volumes.
 
-Shipped via two tools in [agent/tools/classification.py](../agent/tools/classification.py): `bulk_classify_async(memos)` submits to Anthropic's Batch API + persists a row in `pending_batches`; `check_batch_results(batch_id)` polls once and caches the parsed suggestions back. Cross-session UX: `build_system_prompt` reads in-progress rows and adds a one-liner to the dynamic block so the next session announces pending work. The agent decides per-turn whether to batch or use `suggest_classification`, guided by the prompt nudge in `_STATIC_PROMPT`; `BATCH_THRESHOLD = 10` stays as a documented hint. See [LEARNINGS — C2](LEARNINGS_AGENT.md#c2--batch-api-for-bulk-missing-classification).
+Shipped via two tools in [agent/tools/classification.py](../agent/tools/classification.py): `bulk_classify_async(memos)` submits to Anthropic's Batch API + persists a row in `pending_batches`; `check_batch_results(batch_id)` polls once and caches the parsed suggestions back. Cross-session UX: `build_system_prompt` reads in-progress rows and adds a one-liner to the dynamic block so the next session announces pending work. The agent decides per-turn whether to batch or use `suggest_classification`, guided by the prompt nudge in `_STATIC_PROMPT`; `BATCH_THRESHOLD = 10` stays as a documented hint. See [LEARNINGS — C2](AGENT_LEARNINGS.md#c2--batch-api-for-bulk-missing-classification).
 
 ```python
 # Batch classification: use for bulk Missing transaction processing
@@ -478,7 +478,7 @@ apply_taxonomy_extension(
 ```
 Inserts the rule into `classification_rules` (`added_by='agent'`, `approved_by='human'`) and reclassifies matching Missing rows in one SQL transaction. Re-validates before mutating. Returns `{taxonomy_entry_added, rule_id, transactions_reclassified}`.
 
-**Why this is a separate tool from `apply_classification_rule`.** Both write to `classification_rules`, but `apply_taxonomy_extension` validates that the proposed `(main, sub, sub2)` tuple is unprecedented. This makes "I am growing the taxonomy" an explicit agent action distinct from "I am adding a rule for an existing category". The agent calls `list_categories` first to decide which tool applies. A3 added these tools — see [LEARNINGS — A3](LEARNINGS_AGENT.md#a3--extend_taxonomy-tool).
+**Why this is a separate tool from `apply_classification_rule`.** Both write to `classification_rules`, but `apply_taxonomy_extension` validates that the proposed `(main, sub, sub2)` tuple is unprecedented. This makes "I am growing the taxonomy" an explicit agent action distinct from "I am adding a rule for an existing category". The agent calls `list_categories` first to decide which tool applies. A3 added these tools — see [LEARNINGS — A3](AGENT_LEARNINGS.md#a3--extend_taxonomy-tool).
 
 ### 5.2 Scenario Tools
 
@@ -672,19 +672,19 @@ This section records the sequence in which the system was built. Phase 1 is the 
 ### Phase 1 — Core agent (Steps 1–5)
 
 **Step 1 — Synthetic data generator**
-`data/synthetic/generate_synthetic.py`. 15 years of realistic UK transactions shaped to the known taxonomy. Merchant pools mirror the classifier's regexes so data round-trips cleanly. Surfaced the `Health` taxonomy gap and the float-boundary Pret bug before a line of agent code was written. See [LEARNINGS §1](LEARNINGS_AGENT.md#step-1--synthetic-data-generator).
+`data/synthetic/generate_synthetic.py`. 15 years of realistic UK transactions shaped to the known taxonomy. Merchant pools mirror the classifier's regexes so data round-trips cleanly. Surfaced the `Health` taxonomy gap and the float-boundary Pret bug before a line of agent code was written. See [LEARNINGS §1](AGENT_LEARNINGS.md#step-1--synthetic-data-generator).
 
 **Step 2 — SQLite migration**
-`db/migrate.py`. Auto-detects CSV format from headers, ingests into `transactions`, emits a validation epilogue. Idempotent via `--replace` scoped to `data_source`. Extended in C1 to handle `--raw` real-data ingestion. See [LEARNINGS §2](LEARNINGS_AGENT.md#step-2--sqlite-migration).
+`db/migrate.py`. Auto-detects CSV format from headers, ingests into `transactions`, emits a validation epilogue. Idempotent via `--replace` scoped to `data_source`. Extended in C1 to handle `--raw` real-data ingestion. See [LEARNINGS §2](AGENT_LEARNINGS.md#step-2--sqlite-migration).
 
 **Step 3 — Rule lookup wrapper**
-`classifier/rule_lookup.py`. SQLite-first lookup wrapping the hardcoded `categories()` chain as Phase 1 fallback. Phase 2 (A1) removed the hardcoded chain entirely. See [LEARNINGS §3](LEARNINGS_AGENT.md#step-3--rule-lookup-wrapper).
+`classifier/rule_lookup.py`. SQLite-first lookup wrapping the hardcoded `categories()` chain as Phase 1 fallback. Phase 2 (A1) removed the hardcoded chain entirely. See [LEARNINGS §3](AGENT_LEARNINGS.md#step-3--rule-lookup-wrapper).
 
 **Step 4 — Tool implementations**
-All tool functions, tool registry, `claude_helpers.py`, Docker container. Co-located JSON schemas, two-step destructive operations (preview → apply), inline smoke tests. See [LEARNINGS §4](LEARNINGS_AGENT.md#step-4--tool-implementations--docker).
+All tool functions, tool registry, `claude_helpers.py`, Docker container. Co-located JSON schemas, two-step destructive operations (preview → apply), inline smoke tests. See [LEARNINGS §4](AGENT_LEARNINGS.md#step-4--tool-implementations--docker).
 
 **Step 5 — Agent loop**
-`agent/agent.py` + `cli.py` + `transcript.py`. Renderer protocol separates display from logic. Prompt caching on system + state blocks. End-to-end test surfaced the rate/decimal bug in `model_scenario`. See [LEARNINGS §5](LEARNINGS_AGENT.md#step-5--agent-loop).
+`agent/agent.py` + `cli.py` + `transcript.py`. Renderer protocol separates display from logic. Prompt caching on system + state blocks. End-to-end test surfaced the rate/decimal bug in `model_scenario`. See [LEARNINGS §5](AGENT_LEARNINGS.md#step-5--agent-loop).
 
 ---
 

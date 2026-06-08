@@ -211,7 +211,7 @@ to "also run the validator" — it's just the last 20 lines of output.
 `--replace` deletes only rows matching the `data_source` being inserted.
 Real and synthetic data can coexist in one DB during development; replacing
 one doesn't touch the other. This is how the demo-mode switch
-([SPEC §3.6](SPEC_AGENT.md#36--demo-mode)) actually pays off — the dev
+([SPEC §3.6](AGENT_SPEC.md#36--demo-mode)) actually pays off — the dev
 workflow doesn't need separate DB files.
 
 ### Surprises
@@ -689,7 +689,7 @@ their job invisibly."
 
 ### The agent loop in production — reading a real session
 
-**Reference:** `AGENT_ARCHITECTURE_DIAGRAMS.html` — four diagrams
+**Reference:** `AGENT_ARCHITECTURE.html` — four diagrams
 showing the loop, classification HITL flow, scenario use case, and
 data architecture. Open in any browser; supports dark mode.
 
@@ -2160,7 +2160,7 @@ and `--source synthetic` is still a (weird) escape hatch.
 - "Prompt-instructed approval" (Phase 1 HITL) is now defence-in-depth layer 2; code gate (B1) is layer 1.
 - `BATCH_THRESHOLD = 10` as a code constant became "model picks the threshold" — agent context beats heuristics.
 
-**Remaining nice-to-have:** see [SPEC_AGENT.md §10](SPEC_AGENT.md#10-out-of-scope). The two short tail tickets — D1 (currency display) and the B2 CI residual — shipped 2026-06-02 (entry below).
+**Remaining nice-to-have:** see [AGENT_SPEC.md §10](AGENT_SPEC.md#10-out-of-scope). The two short tail tickets — D1 (currency display) and the B2 CI residual — shipped 2026-06-02 (entry below).
 
 ---
 
